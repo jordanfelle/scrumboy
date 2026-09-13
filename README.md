@@ -249,6 +249,7 @@ Simplicity of a light Kanban, with the power of structured systems: Roles, sprin
 | `SCRUMBOY_OIDC_CLIENT_SECRET`       | (empty) - OIDC client secret                                                                                                    |
 | `SCRUMBOY_OIDC_REDIRECT_URL`        | (empty) - Absolute callback URL (must match IdP registration), e.g. `https://scrumboy.example.com/api/auth/oidc/callback`       |
 | `SCRUMBOY_OIDC_LOCAL_AUTH_DISABLED` | (empty) - Set to `true` to disable local password login/bootstrap when OIDC is configured                                       |
+| `SCRUMBOY_OIDC_ALLOWED_EMAIL_DOMAINS` | (empty) - Comma-separated email domains (e.g. `example.com,example.org`) allowed to auto-provision a new account on first SSO login. Empty means unrestricted. Existing users can still log in regardless of domain. |
 
 
 ### Feature flags

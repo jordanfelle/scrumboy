@@ -206,6 +206,16 @@ func (f *fakeIdP) signIDToken(t *testing.T, claims map[string]any) string {
 
 func newTestOIDCServer(t *testing.T, idp *fakeIdP) (*httptest.Server, func()) {
 	t.Helper()
+	ts, _, cleanup := newTestOIDCServerWithConfig(t, idp, nil)
+	return ts, cleanup
+}
+
+// newTestOIDCServerWithConfig behaves like newTestOIDCServer but lets the
+// caller tweak the oidc.Config (e.g. AllowedEmailDomains) before either
+// service instance is constructed, and also exposes the underlying store so
+// tests can assert on persisted state (e.g. that no user was created).
+func newTestOIDCServerWithConfig(t *testing.T, idp *fakeIdP, configure func(*oidc.Config)) (*httptest.Server, *store.Store, func()) {
+	t.Helper()
 
 	dir := t.TempDir()
 	sqlDB, err := db.Open(filepath.Join(dir, "app.db"), db.Options{
@@ -225,12 +235,16 @@ func newTestOIDCServer(t *testing.T, idp *fakeIdP) (*httptest.Server, func()) {
 
 	// Create OIDC service with the fake IdP as issuer.
 	// RedirectURL is set to a placeholder; we override per test as needed.
-	oidcSvc := oidc.New(oidc.Config{
+	cfg := oidc.Config{
 		IssuerCanonical: idp.issuer,
 		ClientID:        idp.clientID,
 		ClientSecret:    "test-secret",
 		RedirectURL:     "http://placeholder/api/auth/oidc/callback",
-	})
+	}
+	if configure != nil {
+		configure(&cfg)
+	}
+	oidcSvc := oidc.New(cfg)
 
 	srv := NewServer(st, Options{
 		MaxRequestBody: 1 << 20,
@@ -241,15 +255,12 @@ func newTestOIDCServer(t *testing.T, idp *fakeIdP) (*httptest.Server, func()) {
 	ts := httptest.NewServer(srv)
 
 	// Update redirect URL to point to the actual test server.
-	oidcSvc2 := oidc.New(oidc.Config{
-		IssuerCanonical: idp.issuer,
-		ClientID:        idp.clientID,
-		ClientSecret:    "test-secret",
-		RedirectURL:     ts.URL + "/api/auth/oidc/callback",
-	})
+	cfg2 := cfg
+	cfg2.RedirectURL = ts.URL + "/api/auth/oidc/callback"
+	oidcSvc2 := oidc.New(cfg2)
 	srv.oidcService = oidcSvc2
 
-	return ts, func() {
+	return ts, st, func() {
 		ts.Close()
 		_ = sqlDB.Close()
 	}
@@ -423,6 +434,97 @@ func TestOIDCTrailingSlashDiscoveryRejectsNonSlashIDTokenIssuer(t *testing.T) {
 	finalURL := resp.Request.URL.String()
 	if !strings.Contains(finalURL, "oidc_error=token") {
 		t.Fatalf("expected token error for mismatched ID token issuer, got %s", finalURL)
+	}
+}
+
+func TestOIDCSignupBlockedByDisallowedEmailDomain(t *testing.T) {
+	idp := newFakeIdP(t)
+	defer idp.close()
+	// idp.email defaults to alice@example.com; restrict to a domain that doesn't match.
+
+	ts, st, cleanup := newTestOIDCServerWithConfig(t, idp, func(cfg *oidc.Config) {
+		cfg.AllowedEmailDomains = []string{"other.example"}
+	})
+	defer cleanup()
+
+	ctx := context.Background()
+	// Seed an existing user so this instance is past first-user bootstrap:
+	// the domain restriction intentionally exempts the very first signup so
+	// an operator can't lock themselves out of an empty instance.
+	if _, err := st.CreateUser(ctx, "existing@other.example", "password1234", "Existing"); err != nil {
+		t.Fatalf("seed existing user: %v", err)
+	}
+
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+
+	resp := followOIDCLogin(t, client, ts.URL+"/api/auth/oidc/login?return_to=/dashboard")
+	resp.Body.Close()
+
+	finalURL := resp.Request.URL.String()
+	if !strings.Contains(finalURL, "oidc_error=domain_not_allowed") {
+		t.Fatalf("expected domain_not_allowed error, got redirect to %s", finalURL)
+	}
+
+	if _, err := st.GetUserByOIDCIdentity(ctx, idp.issuer, idp.subject); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expected no user to be created for rejected identity, got err=%v", err)
+	}
+}
+
+func TestOIDCSignupAllowedByMatchingEmailDomain(t *testing.T) {
+	idp := newFakeIdP(t)
+	defer idp.close()
+	// idp.email defaults to alice@example.com.
+
+	ts, st, cleanup := newTestOIDCServerWithConfig(t, idp, func(cfg *oidc.Config) {
+		cfg.AllowedEmailDomains = []string{"example.com"}
+	})
+	defer cleanup()
+
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+
+	resp := followOIDCLogin(t, client, ts.URL+"/api/auth/oidc/login?return_to=/dashboard")
+	resp.Body.Close()
+
+	if finalURL := resp.Request.URL.String(); strings.Contains(finalURL, "oidc_error") {
+		t.Fatalf("expected successful login for allowed domain, got redirect to %s", finalURL)
+	}
+
+	if _, err := st.GetUserByOIDCIdentity(context.Background(), idp.issuer, idp.subject); err != nil {
+		t.Fatalf("expected user to be created for allowed identity: %v", err)
+	}
+}
+
+func TestOIDCFirstUserBootstrapExemptFromDomainRestriction(t *testing.T) {
+	idp := newFakeIdP(t)
+	defer idp.close()
+	// idp.email defaults to alice@example.com; restrict to a domain that doesn't
+	// match, but this is a brand-new instance with no users yet. The very first
+	// signup must still succeed, or a restrictive allowlist set before anyone
+	// exists would permanently lock the instance's own owner out.
+
+	ts, st, cleanup := newTestOIDCServerWithConfig(t, idp, func(cfg *oidc.Config) {
+		cfg.AllowedEmailDomains = []string{"other.example"}
+	})
+	defer cleanup()
+
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+
+	resp := followOIDCLogin(t, client, ts.URL+"/api/auth/oidc/login?return_to=/dashboard")
+	resp.Body.Close()
+
+	if finalURL := resp.Request.URL.String(); strings.Contains(finalURL, "oidc_error") {
+		t.Fatalf("expected first-user bootstrap to bypass domain restriction, got redirect to %s", finalURL)
+	}
+
+	u, err := st.GetUserByOIDCIdentity(context.Background(), idp.issuer, idp.subject)
+	if err != nil {
+		t.Fatalf("expected first user to be created: %v", err)
+	}
+	if u.SystemRole != store.SystemRoleOwner {
+		t.Fatalf("expected first user to become owner, got role=%v", u.SystemRole)
 	}
 }
 

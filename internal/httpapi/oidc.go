@@ -66,6 +66,23 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// New identity: gate signup by allowed email domain (if configured) before
+		// creating a user. Existing users are never blocked by this check. The very
+		// first user is exempt: otherwise a restrictive allowlist configured before
+		// anyone exists could permanently lock the instance's own owner out of
+		// bootstrapping (especially with local auth disabled, which leaves no
+		// other way in).
+		userCount, err := s.store.CountUsers(ctx)
+		if err != nil {
+			s.logger.Printf("oidc: count users for signup domain check: %v", err)
+			http.Redirect(w, r, "/?oidc_error=token", http.StatusFound)
+			return
+		}
+		if userCount > 0 && !s.oidcService.Config().EmailDomainAllowed(result.Email) {
+			http.Redirect(w, r, "/?oidc_error=domain_not_allowed", http.StatusFound)
+			return
+		}
+
 		// New identity: create user. Pass configured issuer so the store
 		// only grants owner when issuer matches (plan section I).
 		configuredIssuer := s.oidcService.Config().IssuerCanonical
