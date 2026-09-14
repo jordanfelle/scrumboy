@@ -268,30 +268,27 @@ func (s *Server) resolveOIDCLoginIdentity(ctx context.Context, result *oidc.Call
 			return store.User{}, "token"
 		}
 
-		// New identity: gate signup by allowed email domain (if configured) before
-		// creating a user. Existing users are never blocked by this check. The very
-		// first user is exempt: otherwise a restrictive allowlist configured before
-		// anyone exists could permanently lock the instance's own owner out of
-		// bootstrapping (especially with local auth disabled, which leaves no
-		// other way in).
-		userCount, err := s.store.CountUsers(ctx)
-		if err != nil {
-			s.logger.Printf("oidc: count users for signup domain check: %v", err)
-			return store.User{}, "token"
-		}
-		if userCount > 0 && !s.oidcService.Config().EmailDomainAllowed(result.Email) {
-			return store.User{}, "domain_not_allowed"
-		}
-
-		// New identity: create user. Pass configured issuer so the store
-		// only grants owner when issuer matches (plan section I).
+		// New identity: create user. Pass configured issuer so the store only
+		// grants owner when issuer matches (plan section I). The store applies the
+		// domain decision with its authoritative user count in the same transaction,
+		// so exactly the first user is exempt even under concurrent signups.
 		configuredIssuer := s.oidcService.Config().IssuerCanonical
-		u, err = s.store.CreateUserOIDC(ctx, configuredIssuer, result.Issuer, result.Subject, result.Email, result.Name)
+		u, err = s.store.CreateUserOIDCWithDomainPolicy(
+			ctx,
+			configuredIssuer,
+			result.Issuer,
+			result.Subject,
+			result.Email,
+			result.Name,
+			s.oidcService.Config().EmailDomainAllowed(result.Email),
+		)
 		if err != nil {
 			if errors.Is(err, store.ErrConflict) {
 				// Do not identify or attach identities by email. The response is
 				// intentionally generic while still directing the legitimate user.
 				return store.User{}, "link_required"
+			} else if errors.Is(err, store.ErrOIDCSignupDomainNotAllowed) {
+				return store.User{}, "domain_not_allowed"
 			} else {
 				s.logger.Printf("oidc: create user: %v", err)
 				return store.User{}, "token"

@@ -19,6 +19,7 @@ func TestOIDCAllowedEmailDomainsFromEnv(t *testing.T) {
 		{"lowercases", "EXAMPLE.COM", []string{"example.com"}},
 		{"strips leading @", "@example.com", []string{"example.com"}},
 		{"drops empty entries", "example.com,,example.org,", []string{"example.com", "example.org"}},
+		{"only empty entries", ",,", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

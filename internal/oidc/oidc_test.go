@@ -198,6 +198,8 @@ func TestConfigEmailDomainAllowed(t *testing.T) {
 		{"matching domain", []string{"example.com"}, "user@example.com", true},
 		{"matching domain case-insensitive", []string{"example.com"}, "USER@EXAMPLE.COM", true},
 		{"non-matching domain", []string{"example.com"}, "user@other.example", false},
+		{"subdomain is not an exact match", []string{"example.com"}, "user@sub.example.com", false},
+		{"suffix attack is not a match", []string{"example.com"}, "user@evil-example.com", false},
 		{"one of several domains", []string{"example.com", "example.org"}, "user@example.org", true},
 		{"missing @", []string{"example.com"}, "not-an-email", false},
 		{"trailing @", []string{"example.com"}, "user@", false},

@@ -811,6 +811,49 @@ func TestOIDCSignupBlockedByDisallowedEmailDomain(t *testing.T) {
 	}
 }
 
+func TestMobileOIDCSignupBlockedByDisallowedEmailDomain(t *testing.T) {
+	idp := newFakeIdP(t)
+	defer idp.close()
+	ts, st, cleanup := newTestOIDCServerWithConfig(t, idp, func(cfg *oidc.Config) {
+		cfg.AllowedEmailDomains = []string{"other.example"}
+	})
+	defer cleanup()
+	if _, err := st.CreateUser(context.Background(), "existing@other.example", "password1234", "Existing"); err != nil {
+		t.Fatalf("seed existing user: %v", err)
+	}
+
+	client := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }}
+	var start map[string]any
+	resp, _ := doJSON(t, client, http.MethodPost, ts.URL+"/api/auth/oidc/mobile/start", map[string]any{
+		"codeChallenge":       mobileOIDCTestChallenge(mobileOIDCTestProof('v')),
+		"codeChallengeMethod": "S256",
+		"returnTo":            "/dashboard",
+	}, &start)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("mobile start status=%d response=%#v", resp.StatusCode, start)
+	}
+	authorize, err := client.Get(start["authorizationUrl"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorize.Body.Close()
+	callback, err := client.Get(authorize.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	callback.Body.Close()
+	handoff, err := url.Parse(callback.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handoff.Scheme != "com.markrai.scrumboy" || handoff.Query().Get("error") != "domain_not_allowed" || handoff.Query().Get("state") != start["flowState"] {
+		t.Fatalf("mobile domain rejection redirect=%q", callback.Header.Get("Location"))
+	}
+	if handoff.Query().Get("code") != "" || len(callback.Cookies()) != 0 {
+		t.Fatalf("mobile rejection exposed a grant/session: query=%v cookies=%v", handoff.Query(), callback.Cookies())
+	}
+}
+
 func TestOIDCSignupAllowedByMatchingEmailDomain(t *testing.T) {
 	idp := newFakeIdP(t)
 	defer idp.close()
@@ -820,6 +863,9 @@ func TestOIDCSignupAllowedByMatchingEmailDomain(t *testing.T) {
 		cfg.AllowedEmailDomains = []string{"example.com"}
 	})
 	defer cleanup()
+	if _, err := st.CreateUser(context.Background(), "existing@other.example", "password1234", "Existing"); err != nil {
+		t.Fatalf("seed existing user: %v", err)
+	}
 
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{Jar: jar}
@@ -1021,7 +1067,9 @@ func TestOIDCMatchingEmailRequiresExplicitLink(t *testing.T) {
 	idp := newFakeIdP(t)
 	defer idp.close()
 
-	ts, st, cleanup := newTestOIDCServerWithStore(t, idp)
+	ts, st, cleanup := newTestOIDCServerWithConfig(t, idp, func(cfg *oidc.Config) {
+		cfg.AllowedEmailDomains = []string{"allowed.example"}
+	})
 	defer cleanup()
 
 	ctx := context.Background()
@@ -1216,7 +1264,9 @@ func TestOIDCFirstPasswordRejectsDifferentIdentityAndMissingSession(t *testing.T
 func TestOIDCExplicitLinkAndCanonicalEmailOwnership(t *testing.T) {
 	idp := newFakeIdP(t)
 	defer idp.close()
-	ts, st, cleanup := newTestOIDCServerWithStore(t, idp)
+	ts, st, cleanup := newTestOIDCServerWithConfig(t, idp, func(cfg *oidc.Config) {
+		cfg.AllowedEmailDomains = []string{"allowed.example"}
+	})
 	defer cleanup()
 	ctx := context.Background()
 	owner, err := st.BootstrapUser(ctx, idp.email, "Password123!", "Canonical Name")
@@ -1255,6 +1305,14 @@ func TestOIDCExplicitLinkAndCanonicalEmailOwnership(t *testing.T) {
 	newClient := &http.Client{Jar: newJar}
 	login := followOIDCLogin(t, newClient, ts.URL+"/api/auth/oidc/login?return_to=/")
 	login.Body.Close()
+	if strings.Contains(login.Request.URL.String(), "oidc_error") {
+		t.Fatalf("existing linked identity was blocked after its IdP email changed domains: %s", login.Request.URL)
+	}
+	var loginStatus map[string]any
+	doJSON(t, newClient, http.MethodGet, ts.URL+"/api/auth/status", nil, &loginStatus)
+	if loginStatus["user"] == nil {
+		t.Fatalf("existing linked identity did not establish a session: %#v", loginStatus)
+	}
 	original, _ := st.GetUser(ctx, owner.ID)
 	collision, _ := st.GetUser(ctx, other.ID)
 	if original.Email != "alice@example.com" || original.Name != "Canonical Name" || collision.Email != "other@example.com" {
