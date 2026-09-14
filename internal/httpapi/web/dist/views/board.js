@@ -42,17 +42,31 @@ let highlightRafId = null;
 let highlightTimeoutId = null;
 function getVoiceCommandContext() {
     const board = getBoard();
+    const user = getUser();
     const projectId = getProjectId();
     const projectSlug = getSlug();
-    if (!board || projectId == null || !projectSlug)
+    if (!user || !board || projectId == null || !projectSlug)
         return null;
     return {
+        userId: user.id,
         projectId,
         projectSlug,
         board,
         members: getBoardMembers(),
         role: currentUserProjectRole,
     };
+}
+/** Read-only current-board seam consumed only by the lazily loaded device evaluator. */
+export function getVoiceCreateDryRunBoardPorts() {
+    return Object.freeze({
+        getContext: getVoiceCommandContext,
+        refreshBoard: async () => {
+            const context = getVoiceCommandContext();
+            if (!context)
+                throw new Error('context_unavailable');
+            await loadBoardBySlug(context.projectSlug, getTag(), getSearch(), getSprintIdFromUrl(), getAssigneeFromUrl(), getSortFromUrl(), getPriorityFromUrl());
+        },
+    });
 }
 function canUseVoiceCommandContext(context) {
     return getVoiceFlowEnabledPreference() && !!context && canShowVoiceCommands({
@@ -91,28 +105,31 @@ function bindVoiceCommandButton() {
         }
         const initialProjectId = openingContext.projectId;
         const initialProjectSlug = openingContext.projectSlug;
+        const initialUserId = openingContext.userId;
         try {
-            const { openVoiceCommandDialog } = await import("../voice/flow.js");
+            const { openVoiceFlow } = await import("../voice/entry.js");
             const latestContext = getVoiceCommandContext();
             if (!canUseVoiceCommandContext(latestContext)
+                || latestContext.userId !== initialUserId
                 || latestContext.projectId !== initialProjectId
                 || latestContext.projectSlug !== initialProjectSlug) {
                 showToast(t("board.voice.boardChanged"));
                 return;
             }
-            openVoiceCommandDialog({
+            await openVoiceFlow({
+                initialUserId,
                 initialProjectId,
                 initialProjectSlug,
                 getContext: getVoiceCommandContext,
                 refreshBoard: async () => {
                     const context = getVoiceCommandContext();
-                    if (!context || context.projectId !== initialProjectId || context.projectSlug !== initialProjectSlug)
+                    if (!context || context.userId !== initialUserId || context.projectId !== initialProjectId || context.projectSlug !== initialProjectSlug)
                         return;
                     await loadBoardBySlug(context.projectSlug, getTag(), getSearch(), getSprintIdFromUrl(), getAssigneeFromUrl(), getSortFromUrl(), getPriorityFromUrl());
                 },
                 openTodo: async (localId) => {
                     const context = getVoiceCommandContext();
-                    if (!context || context.projectId !== initialProjectId || context.projectSlug !== initialProjectSlug)
+                    if (!context || context.userId !== initialUserId || context.projectId !== initialProjectId || context.projectSlug !== initialProjectSlug)
                         return;
                     navigate(`/${context.projectSlug}/t/${localId}`);
                 },

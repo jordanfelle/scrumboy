@@ -22,6 +22,7 @@ const {
   applyWallpaperForAuthContextMock,
   loadUserWallpaperMock,
   hydrateVoiceFlowEnabledFromServerMock,
+  hydrateVoiceFlowContinueConversationFromServerMock,
   hydrateVoiceFlowHandsFreeConfirmationFromServerMock,
   hydrateVoiceFlowModeFromServerMock,
 } = vi.hoisted(() => ({
@@ -44,6 +45,7 @@ const {
   applyWallpaperForAuthContextMock: vi.fn(),
   loadUserWallpaperMock: vi.fn().mockResolvedValue(undefined),
   hydrateVoiceFlowEnabledFromServerMock: vi.fn(),
+  hydrateVoiceFlowContinueConversationFromServerMock: vi.fn(),
   hydrateVoiceFlowHandsFreeConfirmationFromServerMock: vi.fn(),
   hydrateVoiceFlowModeFromServerMock: vi.fn(),
 }));
@@ -89,9 +91,11 @@ vi.mock('./wallpaper.js', () => ({
 
 vi.mock('./core/voiceflow-preferences.js', () => ({
   hydrateVoiceFlowEnabledFromServer: hydrateVoiceFlowEnabledFromServerMock,
+  hydrateVoiceFlowContinueConversationFromServer: hydrateVoiceFlowContinueConversationFromServerMock,
   hydrateVoiceFlowHandsFreeConfirmationFromServer: hydrateVoiceFlowHandsFreeConfirmationFromServerMock,
   hydrateVoiceFlowModeFromServer: hydrateVoiceFlowModeFromServerMock,
   VOICE_FLOW_ENABLED_PREFERENCE_KEY: 'voiceflowEnabled',
+  VOICE_FLOW_CONTINUE_CONVERSATION_PREFERENCE_KEY: 'voiceflowContinueConversation',
   VOICE_FLOW_HANDS_FREE_CONFIRMATION_PREFERENCE_KEY: 'voiceflowHandsFreeConfirmation',
   VOICE_FLOW_MODE_PREFERENCE_KEY: 'voiceflowMode',
 }));
@@ -136,6 +140,7 @@ describe('router push autosubscribe gate', () => {
     applyWallpaperForAuthContextMock.mockClear();
     loadUserWallpaperMock.mockClear();
     hydrateVoiceFlowEnabledFromServerMock.mockClear();
+    hydrateVoiceFlowContinueConversationFromServerMock.mockClear();
     hydrateVoiceFlowHandsFreeConfirmationFromServerMock.mockClear();
     hydrateVoiceFlowModeFromServerMock.mockClear();
   });
@@ -217,6 +222,28 @@ describe('router push autosubscribe gate', () => {
     expect(renderProjectsMock).toHaveBeenCalledTimes(1);
   });
 
+  it('re-enters the normal auth, router, and realtime path after native OIDC success', async () => {
+    installAuthStatus(false);
+    const mod = await loadRouterModule();
+
+    await mod.handleNativeOIDCResult({ returnTo: '/dashboard?view=mine' });
+
+    expect(window.location.pathname + window.location.search).toBe('/dashboard?view=mine');
+    expect(apiFetchMock).toHaveBeenCalledWith('/api/auth/status');
+    expect(startGlobalRealtimeMock).toHaveBeenCalledOnce();
+    expect(renderDashboardMock).toHaveBeenCalledOnce();
+  });
+
+  it('sanitizes native OIDC errors before returning to the signed-out auth UI', async () => {
+    installSignedOutAuthStatus();
+    const mod = await loadRouterModule();
+
+    await mod.handleNativeOIDCResult({ error: 'attacker_text', code: 'must-not-cross' });
+
+    expect(window.location.search).toBe('?oidc_error=generic');
+    expect(renderAuthMock).toHaveBeenCalledWith(expect.objectContaining({ next: '/?oidc_error=generic' }));
+  });
+
   it('hydrates structured Web Push status and clears it on logout', async () => {
     installAuthStatus(false, { state: 'invalid', reason: 'invalid_subscriber' });
     const mod = await loadRouterModule();
@@ -244,6 +271,7 @@ describe('router push autosubscribe gate', () => {
       next: '/',
       bootstrap: false,
       oidcEnabled: false,
+      mobileOidcEnabled: false,
       localAuthEnabled: true,
       selfServicePasswordResetEnabled: true,
     });
@@ -272,6 +300,7 @@ describe('router push autosubscribe gate', () => {
       next: '/sample-board',
       bootstrap: false,
       oidcEnabled: false,
+      mobileOidcEnabled: false,
       localAuthEnabled: true,
       selfServicePasswordResetEnabled: true,
     });
@@ -280,13 +309,13 @@ describe('router push autosubscribe gate', () => {
 	it('does not render the direct local reset page when local authentication is disabled', async () => {
 	  window.history.replaceState({}, '', '/auth/reset-password?token=secret');
 	  apiFetchMock.mockImplementation(async (url: string) => {
-	    if (url === '/api/auth/status') return { user: null, bootstrapAvailable: false, mode: 'full', oidcEnabled: true, localAuthEnabled: false, selfServicePasswordResetEnabled: false };
+	    if (url === '/api/auth/status') return { user: null, bootstrapAvailable: false, mode: 'full', oidcEnabled: true, mobileOidcEnabled: true, localAuthEnabled: false, selfServicePasswordResetEnabled: false };
 	    throw new Error(`unexpected apiFetch url: ${url}`);
 	  });
 	  const mod = await loadRouterModule();
 	  await mod.router();
 	  expect(renderResetPasswordMock).not.toHaveBeenCalled();
-	  expect(renderAuthMock).toHaveBeenCalledWith(expect.objectContaining({ oidcEnabled: true, localAuthEnabled: false, selfServicePasswordResetEnabled: false }));
+	  expect(renderAuthMock).toHaveBeenCalledWith(expect.objectContaining({ oidcEnabled: true, mobileOidcEnabled: true, localAuthEnabled: false, selfServicePasswordResetEnabled: false }));
 	});
 });
 
@@ -324,6 +353,7 @@ describe('router cold-start boardData handoff', () => {
     applyWallpaperForAuthContextMock.mockClear();
     loadUserWallpaperMock.mockClear();
     hydrateVoiceFlowEnabledFromServerMock.mockClear();
+    hydrateVoiceFlowContinueConversationFromServerMock.mockClear();
     hydrateVoiceFlowHandsFreeConfirmationFromServerMock.mockClear();
     hydrateVoiceFlowModeFromServerMock.mockClear();
     apiFetchMock.mockImplementation(async (url: string) => {

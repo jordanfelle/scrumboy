@@ -64,6 +64,7 @@
   --muted: #9ca3af;
   --border: rgba(255, 255, 255, 0.08);
   --accent: #60a5fa;
+  --success: #22c55e;
   --danger: #ef4444;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
   --project-name-color: #EFBF04;
@@ -86,6 +87,118 @@
   }
 }
 
+/* ==========================================================================
+   Capacitor server-selection bootstrap
+   Scoped so the normal web/PWA and product auth shells remain unchanged.
+   ========================================================================== */
+#scrumboy-mobile-bootstrap {
+  background: var(--bg);
+  height: auto;
+  inset: auto;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  position: relative;
+  -webkit-overflow-scrolling: touch;
+}
+
+#scrumboy-mobile-bootstrap .mobile-bootstrap__container {
+  background: var(--bg);
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  justify-content: center;
+  margin: 0 auto;
+  max-width: 432px;
+  min-height: 100dvh;
+  overflow: visible;
+  padding:
+    max(var(--s-24), env(safe-area-inset-top))
+    max(var(--s-16), env(safe-area-inset-right))
+    max(var(--s-24), env(safe-area-inset-bottom))
+    max(var(--s-16), env(safe-area-inset-left));
+  width: 100%;
+}
+
+#scrumboy-mobile-bootstrap .mobile-bootstrap__brand {
+  margin-bottom: var(--s-16);
+}
+
+#scrumboy-mobile-bootstrap .brand-text {
+  height: var(--s-24);
+}
+
+#scrumboy-mobile-bootstrap .mobile-bootstrap__panel {
+  width: 100%;
+}
+
+#scrumboy-mobile-bootstrap .mobile-bootstrap__helper {
+  line-height: 1.5;
+  margin: calc(-1 * var(--s-6)) 0 var(--s-16);
+}
+
+#scrumboy-mobile-bootstrap .mobile-bootstrap__field {
+  display: flex;
+  flex-direction: column;
+}
+
+#scrumboy-mobile-bootstrap .mobile-bootstrap__field .input {
+  min-height: 44px;
+}
+
+#scrumboy-mobile-bootstrap .mobile-bootstrap__http-warning {
+  color: color-mix(in srgb, var(--danger) 78%, var(--muted));
+  font-size: var(--fs-12);
+  line-height: 1.4;
+  margin: var(--s-6) 0 0;
+}
+
+#scrumboy-mobile-bootstrap .mobile-bootstrap__status {
+  line-height: 1.4;
+  margin: 0;
+  min-height: 2.8em;
+}
+
+#scrumboy-mobile-bootstrap .mobile-bootstrap__status--error {
+  color: var(--danger);
+}
+
+#scrumboy-mobile-bootstrap .mobile-bootstrap__action {
+  min-height: 44px;
+  width: 100%;
+}
+
+#scrumboy-mobile-bootstrap .mobile-bootstrap__privacy {
+  margin: 0;
+  text-align: center;
+}
+
+#scrumboy-mobile-bootstrap .mobile-bootstrap__origin {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-12);
+  line-height: 1.45;
+  margin: 0 0 var(--s-12);
+  overflow-wrap: anywhere;
+  padding: var(--s-10) 12px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+@media (max-width: 620px) {
+  #scrumboy-mobile-bootstrap:focus-within .mobile-bootstrap__container {
+    justify-content: flex-start;
+    min-height: 140dvh;
+  }
+}
+
+@media (max-height: 640px) {
+  #scrumboy-mobile-bootstrap .mobile-bootstrap__container {
+    justify-content: flex-start;
+  }
+}
+
 /* Density hooks: no UI yet; override --ui-scale only */
 [data-density="comfortable"] {
   --ui-scale: 1.2;
@@ -105,6 +218,7 @@
   --muted: #6b7280;
   --border: rgba(0, 0, 0, 0.12);
   --accent: #3b82f6;
+  --success: #16a34a;
   --danger: #dc2626;
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
   --project-name-color: #111827;
@@ -1447,6 +1561,24 @@ html[data-wallpaper-active] #settingsDialog.dialog {
   color: var(--muted);
 }
 
+.btn--success {
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  border-color: color-mix(in srgb, var(--success) 32%, transparent);
+}
+
+.btn--success:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--success) 55%, transparent);
+}
+
+.btn--success:disabled,
+.btn--success[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+  border-color: color-mix(in srgb, var(--success) 20%, transparent);
+  color: var(--muted);
+}
+
 .btn--sso {
   display: block;
   width: 100%;
@@ -1703,6 +1835,194 @@ html[data-wallpaper-active] #settingsDialog.dialog {
   width: min(560px, calc(100vw - 32px));
 }
 
+.voice-agent {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 1400;
+  width: min(340px, calc(100vw - 32px));
+  display: grid;
+  gap: var(--s-10);
+  padding: 12px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-12);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(12px);
+}
+
+.voice-agent__topline,
+.voice-agent__identity,
+.voice-agent__controls,
+.voice-agent__confirmation-actions {
+  display: flex;
+  align-items: center;
+}
+
+.voice-agent__topline {
+  justify-content: space-between;
+  gap: var(--s-10);
+}
+
+.voice-agent__identity,
+.voice-agent__controls,
+.voice-agent__confirmation-actions {
+  gap: var(--s-8);
+}
+
+.voice-agent__identity {
+  min-width: 0;
+  font-size: var(--fs-13);
+  font-weight: 700;
+}
+
+.voice-agent__icon-button {
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 20px;
+}
+
+.voice-agent__icon-button:hover,
+.voice-agent__icon-button:focus-visible {
+  color: var(--text);
+  background: var(--panel2);
+}
+
+.voice-agent__wave {
+  width: 38px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border-radius: 999px;
+  color: var(--accent);
+}
+
+.voice-agent__wave span {
+  width: 3px;
+  height: 5px;
+  border-radius: 999px;
+  background: currentColor;
+  transform-origin: center;
+}
+
+.voice-agent[data-activity="listening"] {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  box-shadow: var(--shadow), 0 0 24px color-mix(in srgb, var(--accent) 38%, transparent);
+}
+
+.voice-agent[data-activity="listening"] .voice-agent__wave span {
+  animation: voice-agent-listening 0.7s ease-in-out infinite alternate;
+}
+
+.voice-agent[data-activity="listening"] .voice-agent__wave span:nth-child(2),
+.voice-agent[data-activity="listening"] .voice-agent__wave span:nth-child(4) {
+  animation-delay: -0.35s;
+}
+
+.voice-agent[data-activity="listening"] .voice-agent__wave span:nth-child(3) {
+  animation-delay: -0.55s;
+}
+
+.voice-agent[data-activity="processing"] .voice-agent__wave {
+  animation: voice-agent-processing 0.85s ease-in-out infinite;
+}
+
+.voice-agent[data-state="question"] .voice-agent__wave,
+.voice-agent[data-state="confirmation"] .voice-agent__wave {
+  color: #f59e0b;
+}
+
+.voice-agent[data-state="success"] .voice-agent__wave {
+  color: #22c55e;
+}
+
+.voice-agent[data-state="error"] .voice-agent__wave {
+  color: var(--danger);
+}
+
+.voice-agent__status {
+  min-height: 20px;
+  color: var(--muted);
+  font-size: var(--fs-13);
+  line-height: 1.4;
+}
+
+.voice-agent__activity {
+  min-height: 20px;
+  color: var(--accent);
+  font-size: var(--fs-13);
+  line-height: 1.4;
+}
+
+.voice-agent__activity[hidden] {
+  display: none;
+}
+
+.voice-agent__confirmation {
+  display: grid;
+  gap: var(--s-10);
+  padding: var(--s-10);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-8);
+  background: var(--panel2);
+}
+
+.voice-agent__confirmation[hidden],
+.voice-agent__controls [hidden],
+.voice-agent__continue[hidden] {
+  display: none;
+}
+
+.voice-agent__summary {
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+.voice-agent__confirmation-actions {
+  justify-content: flex-end;
+}
+
+.voice-agent__controls {
+  flex-wrap: wrap;
+}
+
+.voice-agent__continue {
+  margin-top: 0;
+}
+
+@keyframes voice-agent-listening {
+  from { transform: scaleY(1); }
+  to { transform: scaleY(3.6); }
+}
+
+@keyframes voice-agent-processing {
+  0%, 100% { transform: translateX(-3px); opacity: 0.55; }
+  50% { transform: translateX(3px); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-agent[data-activity="listening"] .voice-agent__wave span,
+  .voice-agent[data-activity="processing"] .voice-agent__wave {
+    animation: none;
+  }
+
+  .voice-agent[data-activity="listening"] .voice-agent__wave span:nth-child(2),
+  .voice-agent[data-activity="listening"] .voice-agent__wave span:nth-child(4) {
+    transform: scaleY(2.2);
+  }
+}
+
 .voice-command {
   gap: var(--s-14);
 }
@@ -1815,10 +2135,62 @@ html[data-wallpaper-active] #settingsDialog.dialog {
   font-size: var(--fs-13);
 }
 
+.voice-command__interpretation,
+.voice-command__interpretation-proposal {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-8);
+  background: rgba(96, 165, 250, 0.08);
+  padding: var(--s-10) 12px;
+}
+
+.voice-command__interpretation-disclosure {
+  margin: 0 0 var(--s-8);
+  color: var(--muted);
+  font-size: var(--fs-13);
+  line-height: 1.45;
+}
+
+.voice-command__interpretation-actions {
+  display: flex;
+  gap: var(--s-8);
+  flex-wrap: wrap;
+  margin-top: var(--s-8);
+}
+
+.voice-command__interpretation-proposal dl {
+  display: grid;
+  gap: var(--s-10);
+  margin: 0;
+}
+
+.voice-command__interpretation-proposal dl > div {
+  display: grid;
+  gap: var(--s-2);
+}
+
+.voice-command__interpretation-proposal dt {
+  color: var(--muted);
+  font-size: var(--fs-12);
+  font-weight: 700;
+}
+
+.voice-command__interpretation-proposal dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .voice-command__summary {
   border: 1px solid var(--border);
   border-radius: var(--radius-8);
   background: rgba(255, 255, 255, 0.03);
+  padding: var(--s-10) 12px;
+  line-height: 1.45;
+}
+
+.voice-command__semantic-interaction {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-8);
+  background: rgba(96, 165, 250, 0.08);
   padding: var(--s-10) 12px;
   line-height: 1.45;
 }
@@ -1859,7 +2231,10 @@ html[data-wallpaper-active] #settingsDialog.dialog {
 }
 
 .voice-command__summary[hidden],
+.voice-command__semantic-interaction[hidden],
 .voice-command__disambiguation[hidden],
+.voice-command__interpretation[hidden],
+.voice-command__interpretation-proposal[hidden],
 .voice-command__speech[hidden],
 .voice-command__confirmation-policy[hidden] {
   display: none;
@@ -2136,6 +2511,47 @@ html[data-wallpaper-active] #settingsDialog.dialog {
 .settings-section__description {
   margin-bottom: var(--s-16);
   font-size: var(--fs-13);
+}
+
+.voice-speech-speed {
+  margin: 12px 0 0 24px;
+}
+
+.voice-speech-speed__heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.voice-speech-speed__heading output {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.voice-speech-speed__slider {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.voice-speech-speed__ticks {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.voice-speech-speed__ticks span {
+  text-align: center;
+}
+
+.voice-speech-speed__ticks span:first-child {
+  text-align: left;
+}
+
+.voice-speech-speed__ticks span:last-child {
+  text-align: right;
 }
 
 .settings-push-vapid-notice {

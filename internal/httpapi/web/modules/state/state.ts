@@ -3,7 +3,8 @@ import { Board, Project, Todo, User, ProjectView, MobileTab, RouteName, Dashboar
 export interface BoardMember {
   userId: number;
   name: string;
-  email: string;
+  /** Intentionally absent from the reduced board-members REST projection. */
+  email?: string;
   image?: string;
   role: string;
 }
@@ -36,6 +37,7 @@ export interface State {
   _emailNotifyAvailable?: boolean;
   emailNotifyPreference: EmailNotifyPreferenceState;
   _oidcEnabled?: boolean;
+  _mobileOidcEnabled?: boolean;
   _localAuthEnabled?: boolean;
   _wallEnabled?: boolean;
   _markdownNotesEnabled?: boolean;

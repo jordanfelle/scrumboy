@@ -82,7 +82,21 @@ import {
   type DesktopNotificationStatusKind,
 } from '../core/assignmentNotify.js';
 import { isPushSubscribed, subscribeToPush, unsubscribeFromPush } from '../core/push.js';
+import { getAppRuntime } from '../platform/runtime.js';
 import { getVoiceFlowEnabledPreference, setVoiceFlowEnabledPreference } from '../core/voiceflow-preferences.js';
+import {
+  getEnhancedSpeechWaitPreset,
+  setEnhancedSpeechWaitPreset,
+  type EnhancedSpeechWaitPreset,
+} from '../core/enhanced-speech-wait-preferences.js';
+import {
+  VOICE_SPEECH_RATE_PRESETS,
+  getVoiceSpeechRate,
+  setVoiceSpeechRate,
+  sliderPositionForVoiceSpeechRate,
+  voiceSpeechRateDisplayLabel,
+  voiceSpeechRateFromSliderPosition,
+} from '../core/voice-speech-rate-preferences.js';
 import {
   getWrapLanesPreference,
   setWrapLanesPreference,
@@ -617,7 +631,7 @@ function syncPushLocaleState(): void {
   const hint = document.getElementById("pushNotifyHint");
   if (!hint) return;
   const pushReady = getAuthStatusAvailable() && getPushConfigured();
-  const unsupported = !("serviceWorker" in navigator) || !("PushManager" in window);
+  const unsupported = !getAppRuntime().supportsWebPush() || !("serviceWorker" in navigator) || !("PushManager" in window);
   if (pushReady && unsupported) {
     hint.textContent = t("settings.customization.push.unsupported");
   }
@@ -719,6 +733,30 @@ export function renderBackupTabHTML(): string {
 
 function renderVoiceFlowCustomizationHTML(): string {
   const enabled = getVoiceFlowEnabledPreference();
+  const speechRate = getVoiceSpeechRate();
+  const speechRatePosition = sliderPositionForVoiceSpeechRate(speechRate);
+  const speechRateLabel = voiceSpeechRateDisplayLabel(speechRate);
+  const enhancedSpeechWaitPreset = getEnhancedSpeechWaitPreset();
+  const enhancedSpeechWaitHTML = getAppRuntime().kind === 'capacitor' ? `
+      <div id="enhancedSpeechWaitControls" ${enabled ? '' : 'hidden'} style="margin:12px 0 0 24px;">
+        <div class="settings-section__title" data-i18n-text="settings.customization.voiceFlow.speechWait.title">Wait after I stop speaking</div>
+        <div class="settings-section__description muted" data-i18n-text="settings.customization.voiceFlow.speechWait.helper">How long Scrumboy should wait before it decides you are done. Applies to AI VoiceFlow on this device.</div>
+        <div style="display:grid;gap:8px;margin-top:10px;">
+          <label class="row" style="align-items:center;gap:8px;cursor:pointer;">
+            <input type="radio" name="enhancedSpeechWaitPreset" value="fast" ${enhancedSpeechWaitPreset === 'fast' ? 'checked' : ''} />
+            <span data-i18n-text="settings.customization.voiceFlow.speechWait.fast">Fast — 2 seconds</span>
+          </label>
+          <label class="row" style="align-items:center;gap:8px;cursor:pointer;">
+            <input type="radio" name="enhancedSpeechWaitPreset" value="normal" ${enhancedSpeechWaitPreset === 'normal' ? 'checked' : ''} />
+            <span data-i18n-text="settings.customization.voiceFlow.speechWait.normal">Normal — 4 seconds</span>
+          </label>
+          <label class="row" style="align-items:center;gap:8px;cursor:pointer;">
+            <input type="radio" name="enhancedSpeechWaitPreset" value="patient" ${enhancedSpeechWaitPreset === 'patient' ? 'checked' : ''} />
+            <span data-i18n-text="settings.customization.voiceFlow.speechWait.patient">Patient — 7 seconds</span>
+          </label>
+        </div>
+      </div>
+  ` : '';
   return `
     <div class="settings-section">
       <div class="settings-section__title" data-i18n-text="settings.customization.voiceFlow.title">VoiceFlow</div>
@@ -726,6 +764,27 @@ function renderVoiceFlowCustomizationHTML(): string {
         <input type="checkbox" id="voiceFlowEnabledToggle" ${enabled ? "checked" : ""} />
         <span data-i18n-text="settings.customization.voiceFlow.toggleLabel">Use voice commands to move, create and delete todos.</span>
       </label>
+      <div id="voiceSpeechSpeedControls" class="voice-speech-speed" ${enabled ? '' : 'hidden'}>
+        <div class="voice-speech-speed__heading">
+          <label for="voiceSpeechSpeedSlider" class="settings-section__title" data-i18n-text="settings.customization.voiceFlow.speechSpeed.title">Speech speed</label>
+          <output id="voiceSpeechSpeedValue" for="voiceSpeechSpeedSlider">${speechRateLabel}</output>
+        </div>
+        <div class="settings-section__description muted" data-i18n-text="settings.customization.voiceFlow.speechSpeed.helper">How fast Scrumboy speaks during VoiceFlow.</div>
+        <input
+          id="voiceSpeechSpeedSlider"
+          class="voice-speech-speed__slider"
+          type="range"
+          min="0"
+          max="4"
+          step="1"
+          value="${speechRatePosition}"
+          aria-valuetext="${speechRateLabel}"
+        />
+        <div class="voice-speech-speed__ticks" aria-hidden="true">
+          ${VOICE_SPEECH_RATE_PRESETS.map(rate => `<span>${voiceSpeechRateDisplayLabel(rate)}</span>`).join('')}
+        </div>
+      </div>
+      ${enhancedSpeechWaitHTML}
     </div>
   `;
 }
@@ -782,7 +841,7 @@ function renderBackupWarnings(warnings: string[] | undefined | null): void {
 // Backup handlers
 async function handleBackupExport(): Promise<void> {
   try {
-    const response = await fetch("/api/backup/export", {
+    const response = await getAppRuntime().transport().request("/api/backup/export", {
       headers: {
         "X-Scrumboy": "1"
       }
@@ -1520,7 +1579,8 @@ export async function renderSettingsModal(options?: { skipProfileRefetch?: boole
 	      ? "settings.profile.authentication.sso"
 	      : "settings.profile.authentication.none";
 	const effectiveLocal = !!u?.hasLocalPassword && getLocalAuthEnabled();
-	const effectiveSSO = !!u?.oidcLinked && getOidcEnabled();
+	const interactiveOIDC = getAppRuntime().supportsInteractiveOIDC();
+	const effectiveSSO = !!u?.oidcLinked && getOidcEnabled() && interactiveOIDC;
 	const ownerWarning = u?.systemRole === "owner" && !effectiveLocal && !effectiveSSO
 	  ? `<div class="settings-section__description" role="alert" data-i18n-text="settings.profile.authentication.warning.noEffectiveOwner">This owner account has no effective sign-in method under the current authentication configuration. The current session may be temporary; host recovery may be required.</div>`
 	  : u?.systemRole === "owner" && !effectiveLocal && effectiveSSO && !getLocalAuthEnabled()
@@ -1528,12 +1588,12 @@ export async function renderSettingsModal(options?: { skipProfileRefetch?: boole
 	    : u?.systemRole === "owner" && !effectiveLocal && effectiveSSO
 	      ? `<div class="settings-section__description" role="alert" data-i18n-text="settings.profile.authentication.warning.providerOnly">This owner relies on the external SSO provider. Set a local recovery password to prepare for an outage.</div>`
 	    : "";
-	const connectSSOAction = u && getOidcEnabled() && !u.oidcLinked
+	const connectSSOAction = u && getOidcEnabled() && interactiveOIDC && !u.oidcLinked
 	  ? u.hasLocalPassword
 	    ? `<button class="btn" id="connectSSOBtn" data-i18n-text="settings.profile.authentication.connectSSO">Connect SSO</button>`
 	    : `<div class="muted"><strong data-i18n-text="settings.profile.authentication.connectSSO">Connect SSO</strong>: <span data-i18n-text="settings.profile.authentication.connectRequiresLocal">Set or recover a Scrumboy password before connecting the current SSO provider.</span></div>`
 	  : "";
-	const methodActions = u ? `
+	const methodActions = u && interactiveOIDC ? `
 	  <div style="margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px;">
 	    ${u.oidcLinked && !u.hasLocalPassword ? `<button class="btn" id="setScrumboyPasswordBtn" data-i18n-text="settings.profile.authentication.setPassword">Set Scrumboy password</button>` : ""}
 	    ${connectSSOAction}
@@ -1556,7 +1616,15 @@ export async function renderSettingsModal(options?: { skipProfileRefetch?: boole
           <button class="btn" id="enable2FABtn" style="margin-top: 8px;" data-i18n-text="settings.profile.twoFactor.enable">Enable 2FA</button>
         </div>
       `) : "";
+    const runtime = getAppRuntime();
+    const mobileServerSection = runtime.kind === 'capacitor' ? `
+      <div class="settings-section" style="margin-bottom: 24px;">
+        <div class="settings-section__title">Server</div>
+        <div class="settings-section__description muted">${escapeHTML(runtime.serverOrigin())}</div>
+        <button class="btn btn--ghost" id="mobileChangeServerBtn" type="button" style="margin-top: 8px;">Change server</button>
+      </div>` : "";
     return `
+      ${mobileServerSection}
       <div class="settings-section" style="position: relative;">
         <div class="settings-section__title" data-i18n-text="settings.profile.title">Profile</div>
         <div class="settings-section__description muted" data-i18n-text="settings.profile.description">Signed-in user for this instance.</div>
@@ -2021,11 +2089,14 @@ export async function renderSettingsModal(options?: { skipProfileRefetch?: boole
   if (logoutBtn) {
     logoutBtn.addEventListener("click", () => {
       (settingsDialog as HTMLDialogElement).close();
-      const form = document.createElement("form");
-      form.method = "POST";
-      form.action = "/api/auth/logout";
-      document.body.appendChild(form);
-      form.submit();
+      void getAppRuntime().transport().logout();
+    }, { signal });
+  }
+
+  const mobileChangeServerBtn = document.getElementById("mobileChangeServerBtn");
+  if (mobileChangeServerBtn) {
+    mobileChangeServerBtn.addEventListener("click", () => {
+      window.dispatchEvent(new CustomEvent("scrumboy:mobile-change-server"));
     }, { signal });
   }
 
@@ -2452,11 +2523,41 @@ export async function renderSettingsModal(options?: { skipProfileRefetch?: boole
         "change",
         () => {
           setVoiceFlowEnabledPreference(voiceFlowEnabledToggle.checked);
+          const voiceSpeechSpeedControls = document.getElementById("voiceSpeechSpeedControls");
+          if (voiceSpeechSpeedControls) voiceSpeechSpeedControls.hidden = !voiceFlowEnabledToggle.checked;
+          const enhancedSpeechWaitControls = document.getElementById("enhancedSpeechWaitControls");
+          if (enhancedSpeechWaitControls) enhancedSpeechWaitControls.hidden = !voiceFlowEnabledToggle.checked;
           emit("voiceflow:enabled-changed", voiceFlowEnabledToggle.checked);
         },
         { signal }
       );
     }
+
+    const voiceSpeechSpeedSlider = document.getElementById("voiceSpeechSpeedSlider") as HTMLInputElement | null;
+    if (voiceSpeechSpeedSlider) {
+      voiceSpeechSpeedSlider.addEventListener(
+        "input",
+        () => {
+          const rate = voiceSpeechRateFromSliderPosition(Number(voiceSpeechSpeedSlider.value));
+          const label = voiceSpeechRateDisplayLabel(rate);
+          voiceSpeechSpeedSlider.setAttribute("aria-valuetext", label);
+          const currentValue = document.getElementById("voiceSpeechSpeedValue");
+          if (currentValue) currentValue.textContent = label;
+          setVoiceSpeechRate(rate);
+        },
+        { signal }
+      );
+    }
+
+    document.querySelectorAll<HTMLInputElement>('input[name="enhancedSpeechWaitPreset"]').forEach((option) => {
+      option.addEventListener(
+        "change",
+        () => {
+          if (option.checked) setEnhancedSpeechWaitPreset(option.value as EnhancedSpeechWaitPreset);
+        },
+        { signal }
+      );
+    });
 
     const wrapLanesToggle = document.getElementById("wrapLanesToggle") as HTMLInputElement | null;
     if (wrapLanesToggle) {
@@ -2496,7 +2597,7 @@ export async function renderSettingsModal(options?: { skipProfileRefetch?: boole
         if (pushHint) {
           pushHint.textContent = "";
         }
-      } else if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      } else if (!getAppRuntime().supportsWebPush() || !("serviceWorker" in navigator) || !("PushManager" in window)) {
         pushToggle.disabled = true;
         if (pushHint) {
           pushHint.textContent = t("settings.customization.push.unsupported");
@@ -3065,7 +3166,7 @@ type OIDCAuthorizationResponse = {
 };
 
 function submitOIDCAuthorizationForm(request: OIDCAuthorizationResponse): void {
-  const endpoint = new URL(request.authorizationEndpoint, window.location.origin);
+  const endpoint = new URL(request.authorizationEndpoint, getAppRuntime().serverOrigin());
   if (endpoint.protocol !== "https:" && endpoint.protocol !== "http:") {
     throw new Error(t("settings.profile.authentication.providerInvalid"));
   }
