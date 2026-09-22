@@ -315,9 +315,22 @@ Manage opaque MCP/API tokens while logged in (session cookie). Mutating endpoint
 
 | Method | Path | Body | Success |
 |--------|------|------|---------|
-| `GET` | `/api/me/tokens` | — | `200` JSON `{ "items": [ { "id", "name?", "createdAt", "lastUsedAt?", "revokedAt?" } ] }` (no secret) |
-| `POST` | `/api/me/tokens` | `{ "name": "optional label" }` | `201` JSON `{ "id", "name?", "createdAt", "token" }` — **`token` is shown only on create** |
+| `GET` | `/api/me/tokens` | — | `200` JSON `{ "items": [ { "id", "name?", "createdAt", "lastUsedAt?", "revokedAt?", "isService" } ] }` (no secret) |
+| `POST` | `/api/me/tokens` | `{ "name": "optional label", "isService": false }` | `201` JSON `{ "id", "name?", "createdAt", "token", "isService" }` — **`token` is shown only on create** |
 | `DELETE` | `/api/me/tokens/{id}` | — | `204` (revoke / soft-delete) |
+
+`isService` (optional, default `false`) flags the token as a bot/automation identity rather than a
+personal credential tied to this login. It doesn't change what the token can do while active. It
+changes what happens if this user account is later deleted: an owner's `DeleteUser` reassigns the
+departing user's active service tokens to the requesting owner **and revokes them in the same
+step**, instead of letting the row disappear entirely via cascade like a personal token. This keeps
+the token's audit record (name, `isService`, `createdAt`/`lastUsedAt`) alive under the new owner for
+offboarding/governance review, but the secret itself dies with its original holder — reassigning
+ownership without invalidating the secret would let the departing user go on authenticating as the
+new owner using the same plaintext, which is a privilege-escalation hole, not a convenience. A
+service token surviving a deletion still needs to be re-minted (with a new secret) by the new owner
+for any automation that depended on it; this feature preserves the paper trail, it does not achieve
+zero-downtime credential handoff.
 
 Create a token (after login, with session + header):
 
@@ -326,6 +339,16 @@ curl -b cookies.txt -X POST http://localhost:8080/api/me/tokens \
   -H "Content-Type: application/json" \
   -H "X-Scrumboy: 1" \
   -d '{"name":"Claude"}'
+```
+
+Create a service token for unattended automation (e.g. a CI job), so it survives if the minting
+user's account is later removed:
+
+```bash
+curl -b cookies.txt -X POST http://localhost:8080/api/me/tokens \
+  -H "Content-Type: application/json" \
+  -H "X-Scrumboy: 1" \
+  -d '{"name":"wiki-freshness-check-ci","isService":true}'
 ```
 
 Then call MCP with **Bearer** (no cookie required for this path):

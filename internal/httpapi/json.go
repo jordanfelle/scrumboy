@@ -196,6 +196,7 @@ type apiTokenListItemJSON struct {
 	CreatedAt  time.Time  `json:"createdAt"`
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
 	RevokedAt  *time.Time `json:"revokedAt,omitempty"`
+	IsService  bool       `json:"isService"`
 }
 
 type apiTokenCreateJSON struct {
@@ -203,6 +204,7 @@ type apiTokenCreateJSON struct {
 	Name      *string   `json:"name,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 	Token     string    `json:"token"`
+	IsService bool      `json:"isService"`
 }
 
 func apiTokensToJSON(tokens []store.APITokenMeta) []apiTokenListItemJSON {
@@ -214,6 +216,7 @@ func apiTokensToJSON(tokens []store.APITokenMeta) []apiTokenListItemJSON {
 			CreatedAt:  t.CreatedAt,
 			LastUsedAt: t.LastUsedAt,
 			RevokedAt:  t.RevokedAt,
+			IsService:  t.IsService,
 		})
 	}
 	return out

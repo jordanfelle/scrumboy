@@ -20,10 +20,14 @@ type APITokenMeta struct {
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
 	RevokedAt  *time.Time
+	IsService  bool
 }
 
 // CreateUserAPIToken generates a new opaque token, stores SHA-256(token) only, and returns the new row id, plaintext once, and created time.
-func (s *Store) CreateUserAPIToken(ctx context.Context, userID int64, name *string) (id int64, plaintext string, createdAt time.Time, err error) {
+// isService flags the token as a bot/automation identity: when its owning user is later deleted,
+// DeleteUser reassigns (and revokes) the row instead of letting it cascade-delete outright, so its
+// audit record survives offboarding even though the secret itself must still be re-minted.
+func (s *Store) CreateUserAPIToken(ctx context.Context, userID int64, name *string, isService bool) (id int64, plaintext string, createdAt time.Time, err error) {
 	if userID <= 0 {
 		return 0, "", time.Time{}, fmt.Errorf("%w: invalid user id", ErrValidation)
 	}
@@ -48,9 +52,9 @@ func (s *Store) CreateUserAPIToken(ctx context.Context, userID int64, name *stri
 	}
 
 	res, err := s.db.ExecContext(ctx, `
-INSERT INTO api_tokens(user_id, token_hash, name, created_at, last_used_at, revoked_at)
-VALUES (?, ?, ?, ?, NULL, NULL)
-`, userID, tokenHash, nameArg, nowMs)
+INSERT INTO api_tokens(user_id, token_hash, name, created_at, last_used_at, revoked_at, is_service)
+VALUES (?, ?, ?, ?, NULL, NULL, ?)
+`, userID, tokenHash, nameArg, nowMs, isService)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed: api_tokens.token_hash") {
 			return 0, "", time.Time{}, ErrConflict
@@ -70,7 +74,7 @@ func (s *Store) ListUserAPITokens(ctx context.Context, userID int64) ([]APIToken
 		return nil, fmt.Errorf("%w: invalid user id", ErrValidation)
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, name, created_at, last_used_at, revoked_at
+SELECT id, name, created_at, last_used_at, revoked_at, is_service
 FROM api_tokens
 WHERE user_id = ?
 ORDER BY created_at DESC
@@ -83,18 +87,20 @@ ORDER BY created_at DESC
 	var out []APITokenMeta
 	for rows.Next() {
 		var (
-			id              int64
-			name            sql.NullString
-			createdAtMs     int64
-			lastUsedMs      sql.NullInt64
-			revokedMs       sql.NullInt64
+			id          int64
+			name        sql.NullString
+			createdAtMs int64
+			lastUsedMs  sql.NullInt64
+			revokedMs   sql.NullInt64
+			isService   bool
 		)
-		if err := rows.Scan(&id, &name, &createdAtMs, &lastUsedMs, &revokedMs); err != nil {
+		if err := rows.Scan(&id, &name, &createdAtMs, &lastUsedMs, &revokedMs, &isService); err != nil {
 			return nil, fmt.Errorf("scan api token: %w", err)
 		}
 		meta := APITokenMeta{
 			ID:        id,
 			CreatedAt: time.UnixMilli(createdAtMs).UTC(),
+			IsService: isService,
 		}
 		if name.Valid {
 			s := name.String
@@ -135,6 +141,24 @@ WHERE id = ? AND user_id = ? AND revoked_at IS NULL
 	}
 	if n == 0 {
 		return ErrNotFound
+	}
+	return nil
+}
+
+// reassignServiceAPITokens moves any active (non-revoked) service tokens owned by fromUserID to
+// toUserID instead of letting them cascade-delete with their former owner's account, and revokes
+// them in the same step. The secret must die with its original holder no matter who the row is
+// reassigned to — GetUserByAPIToken authorizes purely by the token's user_id, so leaving the old
+// plaintext valid would let fromUserID silently authenticate as toUserID after the "handoff".
+// Reassigning preserves the row (name, is_service, created_at/last_used_at) as an audit record
+// under the new owner instead of deleting it outright; it does not keep the credential usable.
+// Runs within the caller's transaction; must be called before the user row is deleted.
+func reassignServiceAPITokens(ctx context.Context, tx *sql.Tx, fromUserID, toUserID int64, now time.Time) error {
+	if _, err := tx.ExecContext(ctx, `
+UPDATE api_tokens SET user_id = ?, revoked_at = ?
+WHERE user_id = ? AND is_service = 1 AND revoked_at IS NULL
+`, toUserID, now.UnixMilli(), fromUserID); err != nil {
+		return fmt.Errorf("reassign service api tokens: %w", err)
 	}
 	return nil
 }

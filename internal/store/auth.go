@@ -587,7 +587,16 @@ func (s *Store) DeleteUser(ctx context.Context, requesterID, targetUserID int64)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Delete user (cascade will handle sessions)
+	// Reassign (and revoke) the target's service (bot/automation) API tokens to the requesting
+	// owner before the user row disappears, so their audit record survives offboarding instead of
+	// vanishing with the account. The secret itself is revoked in the same step: it must not
+	// remain valid for the departing user to use as the new owner's identity. Personal tokens are
+	// left alone and cascade-delete with the user as before.
+	if err := reassignServiceAPITokens(ctx, tx, targetUserID, requesterID, time.Now().UTC()); err != nil {
+		return err
+	}
+
+	// Delete user (cascade will handle sessions and any remaining personal tokens)
 	if _, err := tx.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, targetUserID); err != nil {
 		return fmt.Errorf("delete user: %w", err)
 	}
