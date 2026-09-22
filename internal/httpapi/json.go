@@ -207,6 +207,51 @@ type apiTokenCreateJSON struct {
 	IsService bool      `json:"isService"`
 }
 
+type archivedServiceAPITokenUserJSON struct {
+	ID    int64  `json:"id"`
+	Email string `json:"email"`
+	Name  string `json:"name,omitempty"`
+}
+
+type archivedServiceAPITokenJSON struct {
+	ID               int64                           `json:"id"`
+	TokenID          int64                           `json:"tokenId"`
+	Name             *string                         `json:"name,omitempty"`
+	CreatedAt        time.Time                       `json:"createdAt"`
+	LastUsedAt       *time.Time                      `json:"lastUsedAt,omitempty"`
+	RevokedAt        time.Time                       `json:"revokedAt"`
+	RevokedOnArchive bool                            `json:"revokedOnArchive"`
+	OriginUser       archivedServiceAPITokenUserJSON `json:"originUser"`
+	ArchivedAt       time.Time                       `json:"archivedAt"`
+	ArchivedBy       archivedServiceAPITokenUserJSON `json:"archivedBy"`
+}
+
+func archivedServiceAPITokensToJSON(items []store.ArchivedServiceAPIToken) []archivedServiceAPITokenJSON {
+	out := make([]archivedServiceAPITokenJSON, 0, len(items))
+	for _, item := range items {
+		out = append(out, archivedServiceAPITokenJSON{
+			ID:               item.ID,
+			TokenID:          item.TokenID,
+			Name:             item.Name,
+			CreatedAt:        item.CreatedAt,
+			LastUsedAt:       item.LastUsedAt,
+			RevokedAt:        item.RevokedAt,
+			RevokedOnArchive: item.RevokedOnArchive,
+			OriginUser: archivedServiceAPITokenUserJSON{
+				ID:    item.OriginUserID,
+				Email: item.OriginUserEmail,
+				Name:  item.OriginUserName,
+			},
+			ArchivedAt: item.ArchivedAt,
+			ArchivedBy: archivedServiceAPITokenUserJSON{
+				ID:    item.ArchivedByUserID,
+				Email: item.ArchivedByUserEmail,
+			},
+		})
+	}
+	return out
+}
+
 func apiTokensToJSON(tokens []store.APITokenMeta) []apiTokenListItemJSON {
 	out := make([]apiTokenListItemJSON, 0, len(tokens))
 	for _, t := range tokens {

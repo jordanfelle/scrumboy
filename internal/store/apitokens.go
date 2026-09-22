@@ -24,9 +24,10 @@ type APITokenMeta struct {
 }
 
 // CreateUserAPIToken generates a new opaque token, stores SHA-256(token) only, and returns the new row id, plaintext once, and created time.
-// isService marks the user-owned token for bot/automation use: when its owning user is later deleted,
-// DeleteUser reassigns (and revokes) the row instead of letting it cascade-delete outright, so its
-// audit record survives offboarding even though the secret itself must still be re-minted.
+// isService marks the user-owned token for bot/automation use; it authenticates as that user like any
+// other token. When the user is later deleted, DeleteUser copies its metadata and owner provenance
+// into archived_service_api_tokens before the row cascade-deletes, so the metadata is kept for
+// offboarding review while the secret stops working.
 func (s *Store) CreateUserAPIToken(ctx context.Context, userID int64, name *string, isService bool) (id int64, plaintext string, createdAt time.Time, err error) {
 	if userID <= 0 {
 		return 0, "", time.Time{}, fmt.Errorf("%w: invalid user id", ErrValidation)
@@ -141,27 +142,6 @@ WHERE id = ? AND user_id = ? AND revoked_at IS NULL
 	}
 	if n == 0 {
 		return ErrNotFound
-	}
-	return nil
-}
-
-// reassignServiceAPITokens moves all service tokens owned by fromUserID to toUserID instead of
-// letting them cascade-delete with their former owner's account. Active tokens are revoked in the
-// same update; already-revoked tokens retain their original revocation timestamp. The secret must
-// die with its original holder no matter who the row is reassigned to — GetUserByAPIToken
-// authorizes purely by the token's user_id, so leaving the old plaintext valid would let
-// fromUserID silently authenticate as toUserID after the "handoff". Moving already-revoked rows
-// is also required for retention: otherwise a token transferred during one deletion would be
-// cascade-deleted if its new owner were deleted later.
-// Reassigning preserves the row (name, is_service, created_at/last_used_at) as an audit record
-// under the new owner instead of deleting it outright; it does not keep the credential usable.
-// Runs within the caller's transaction; must be called before the user row is deleted.
-func reassignServiceAPITokens(ctx context.Context, tx *sql.Tx, fromUserID, toUserID int64, now time.Time) error {
-	if _, err := tx.ExecContext(ctx, `
-UPDATE api_tokens SET user_id = ?, revoked_at = COALESCE(revoked_at, ?)
-WHERE user_id = ? AND is_service = 1
-`, toUserID, now.UnixMilli(), fromUserID); err != nil {
-		return fmt.Errorf("reassign service api tokens: %w", err)
 	}
 	return nil
 }

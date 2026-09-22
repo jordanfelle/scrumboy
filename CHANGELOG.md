@@ -7,16 +7,18 @@
 ### Added
 
 - **Service API tokens** - `POST /api/me/tokens` accepts an optional
-  `isService` flag marking a normal user-owned token for bot/automation use
-  rather than personal use; it does not create a separate service identity.
-  When an owner deletes a user (`DeleteUser`), all of
-  that user's service-token records are reassigned to the requesting owner;
-  active tokens are revoked in the same transaction and already-revoked
-  tokens retain their revocation time. The rows therefore do not cascade-delete
-  with either their original owner or a later custodian, preserving bot/CI
-  credential metadata for audit purposes even though (by design) any usable
-  secret must be re-minted by the new owner. Personal tokens are unaffected
-  and still deleted with their owner as before.
+  `isService` flag marking a user-owned token for bot/automation use. It is
+  not a separate service identity: while its user exists, a service token
+  authenticates as that user with that user's permissions. When an owner
+  deletes the user, each service token's metadata (name, timestamps,
+  revocation state) is archived together with snapshots of who held it and
+  which owner deleted them, and then all of the user's tokens are deleted in
+  the same transaction, so no secret survives. Archive records are immutable
+  and hold no secret. Owners can list them with
+  `GET /api/admin/service-token-archive` and permanently purge older ones
+  with `DELETE /api/admin/service-token-archive?archivedBefore=…`. Omitting
+  `isService` creates a personal token, which is deleted with its owner as
+  before. See [API.md](API.md#service-token-archive).
 
 ## [3.36.3] - 2026-09-20
 

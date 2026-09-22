@@ -565,9 +565,12 @@ func (s *Store) DeleteUser(ctx context.Context, requesterID, targetUserID int64)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Keep authorization, last-owner enforcement, token reassignment, and user
-	// deletion on one database snapshot. Otherwise another owner mutation can
-	// invalidate the preflight checks before this transaction begins.
+	// Keep authorization, last-owner enforcement, service-token archival, and user
+	// deletion on one database snapshot. The archive permanently records the
+	// requester as the deleting owner and joins on the requester's row: if a
+	// concurrent mutation demoted or deleted the requester after a preflight
+	// read, the archive would name a non-owner or silently record nothing while
+	// the tokens still cascade away.
 	if err := requireOwnerTx(ctx, tx, requesterID); err != nil {
 		return err
 	}
@@ -592,16 +595,15 @@ func (s *Store) DeleteUser(ctx context.Context, requesterID, targetUserID int64)
 		}
 	}
 
-	// Reassign (and revoke) the target's service (bot/automation) API tokens to the requesting
-	// owner before the user row disappears, so their audit record survives offboarding instead of
-	// vanishing with the account. The secret itself is revoked in the same step: it must not
-	// remain valid for the departing user to use as the new owner's identity. Personal tokens are
-	// left alone and cascade-delete with the user as before.
-	if err := reassignServiceAPITokens(ctx, tx, targetUserID, requesterID, time.Now().UTC()); err != nil {
+	// Archive the target's service (bot/automation) API token metadata, with immutable origin
+	// provenance, before the user row disappears. The api_tokens rows themselves (service and
+	// personal) still cascade-delete below, so every secret stops authenticating atomically with
+	// the deletion; the archive never holds a token hash.
+	if err := archiveServiceAPITokensTx(ctx, tx, targetUserID, requesterID, time.Now().UTC()); err != nil {
 		return err
 	}
 
-	// Delete user (cascade will handle sessions and any remaining personal tokens)
+	// Delete user (cascade will handle sessions and API tokens)
 	if _, err := tx.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, targetUserID); err != nil {
 		return fmt.Errorf("delete user: %w", err)
 	}
@@ -620,34 +622,20 @@ func (s *Store) UpdateUserRole(ctx context.Context, requesterID, targetUserID in
 		return fmt.Errorf("%w: invalid system role", ErrValidation)
 	}
 
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin update role tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Authorization, the target's current role, and the owner count must be read
-	// from the same snapshot as the mutation. In WAL mode, a concurrent write
-	// that invalidates this snapshot then makes the write fail closed instead of
-	// allowing two individually valid demotions to remove every owner.
-	if err := requireOwnerTx(ctx, tx, requesterID); err != nil {
+	// Require owner role
+	if err := s.requireOwner(ctx, requesterID); err != nil {
 		return err
 	}
 
-	var targetRoleRaw string
-	if err := tx.QueryRowContext(ctx, `SELECT system_role FROM users WHERE id = ?`, targetUserID).Scan(&targetRoleRaw); err != nil {
-		if err == sql.ErrNoRows {
-			return ErrNotFound
-		}
-		return fmt.Errorf("get target user role: %w", err)
-	}
-	targetRole, ok := ParseSystemRole(targetRoleRaw)
-	if !ok {
-		targetRole = SystemRoleUser
+	// Get target user
+	target, err := s.GetUser(ctx, targetUserID)
+	if err != nil {
+		return err
 	}
 
-	if targetRole == SystemRoleOwner && newRole != SystemRoleOwner {
-		count, err := countOwnersTx(ctx, tx)
+	// Prevent demotion of the last owner
+	if target.SystemRole == SystemRoleOwner && newRole != SystemRoleOwner {
+		count, err := s.countOwners(ctx)
 		if err != nil {
 			return err
 		}
@@ -655,6 +643,12 @@ func (s *Store) UpdateUserRole(ctx context.Context, requesterID, targetUserID in
 			return fmt.Errorf("%w: cannot demote the last owner", ErrValidation)
 		}
 	}
+
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin update role tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx, `UPDATE users SET system_role = ? WHERE id = ?`, newRole.String(), targetUserID); err != nil {
 		return fmt.Errorf("update role: %w", err)
