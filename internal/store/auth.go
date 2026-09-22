@@ -559,20 +559,31 @@ func (s *Store) DeleteUser(ctx context.Context, requesterID, targetUserID int64)
 		return fmt.Errorf("%w: cannot delete yourself", ErrValidation)
 	}
 
-	// Require owner role
-	if err := s.requireOwner(ctx, requesterID); err != nil {
-		return err
-	}
-
-	// Check if target is an owner
-	target, err := s.GetUser(ctx, targetUserID)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
+		return fmt.Errorf("begin delete user tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Keep authorization, last-owner enforcement, token reassignment, and user
+	// deletion on one database snapshot. Otherwise another owner mutation can
+	// invalidate the preflight checks before this transaction begins.
+	if err := requireOwnerTx(ctx, tx, requesterID); err != nil {
 		return err
 	}
-
-	// Prevent deletion of the last owner
-	if target.SystemRole == SystemRoleOwner {
-		count, err := s.countOwners(ctx)
+	var targetRoleRaw string
+	if err := tx.QueryRowContext(ctx, `SELECT system_role FROM users WHERE id = ?`, targetUserID).Scan(&targetRoleRaw); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		return fmt.Errorf("get target user role: %w", err)
+	}
+	targetRole, ok := ParseSystemRole(targetRoleRaw)
+	if !ok {
+		targetRole = SystemRoleUser
+	}
+	if targetRole == SystemRoleOwner {
+		count, err := countOwnersTx(ctx, tx)
 		if err != nil {
 			return err
 		}
@@ -580,12 +591,6 @@ func (s *Store) DeleteUser(ctx context.Context, requesterID, targetUserID int64)
 			return fmt.Errorf("%w: cannot delete the last owner", ErrValidation)
 		}
 	}
-
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin delete user tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 
 	// Reassign (and revoke) the target's service (bot/automation) API tokens to the requesting
 	// owner before the user row disappears, so their audit record survives offboarding instead of
@@ -615,20 +620,34 @@ func (s *Store) UpdateUserRole(ctx context.Context, requesterID, targetUserID in
 		return fmt.Errorf("%w: invalid system role", ErrValidation)
 	}
 
-	// Require owner role
-	if err := s.requireOwner(ctx, requesterID); err != nil {
-		return err
-	}
-
-	// Get target user
-	target, err := s.GetUser(ctx, targetUserID)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
+		return fmt.Errorf("begin update role tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Authorization, the target's current role, and the owner count must be read
+	// from the same snapshot as the mutation. In WAL mode, a concurrent write
+	// that invalidates this snapshot then makes the write fail closed instead of
+	// allowing two individually valid demotions to remove every owner.
+	if err := requireOwnerTx(ctx, tx, requesterID); err != nil {
 		return err
 	}
 
-	// Prevent demotion of the last owner
-	if target.SystemRole == SystemRoleOwner && newRole != SystemRoleOwner {
-		count, err := s.countOwners(ctx)
+	var targetRoleRaw string
+	if err := tx.QueryRowContext(ctx, `SELECT system_role FROM users WHERE id = ?`, targetUserID).Scan(&targetRoleRaw); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		return fmt.Errorf("get target user role: %w", err)
+	}
+	targetRole, ok := ParseSystemRole(targetRoleRaw)
+	if !ok {
+		targetRole = SystemRoleUser
+	}
+
+	if targetRole == SystemRoleOwner && newRole != SystemRoleOwner {
+		count, err := countOwnersTx(ctx, tx)
 		if err != nil {
 			return err
 		}
@@ -636,12 +655,6 @@ func (s *Store) UpdateUserRole(ctx context.Context, requesterID, targetUserID in
 			return fmt.Errorf("%w: cannot demote the last owner", ErrValidation)
 		}
 	}
-
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
-	if err != nil {
-		return fmt.Errorf("begin update role tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx, `UPDATE users SET system_role = ? WHERE id = ?`, newRole.String(), targetUserID); err != nil {
 		return fmt.Errorf("update role: %w", err)

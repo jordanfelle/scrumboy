@@ -1,20 +1,22 @@
 # Changelog
 
-## [Unreleased]
+> **Upgrades:** No breaking changes for **3.7.0 ≤ v ≤ 3.36.x** unless noted below. Notable upgrade impact: **3.22.0** (MCP/OAuth), **3.24.0** (MCP tool names), **3.26.0** (MCP project tags), **3.29.0** (MCP JSON-RPC error/`board_get` identity), **3.30.0** (reversible per-project sprint capability), **3.31.0** (per-project priority tiers), **3.33.0** (Agenda ICS feeds need `SCRUMBOY_ENCRYPTION_KEY`), **3.33.12** (webhook destinations must be publicly routable), **3.35.0** (backup format 1.2; Trello closed-card titles) - see those releases.
+
+## [3.36.4] - 2026-09-22
 
 ### Added
 
 - **Service API tokens** - `POST /api/me/tokens` accepts an optional
-  `isService` flag marking a token as a bot/automation identity rather than a
-  personal credential. When an owner deletes a user (`DeleteUser`), that
-  user's active service tokens are reassigned to the requesting owner and
-  revoked in the same step, instead of cascade-deleting entirely with the
-  account, so the record of a bot/CI credential survives offboarding for
-  audit purposes even though (by design) the secret itself must still be
-  re-minted by the new owner. Personal tokens are unaffected and still
-  deleted with their owner as before.
-
-> **Upgrades:** No breaking changes for **3.7.0 ≤ v ≤ 3.36.x** unless noted below. Notable upgrade impact: **3.22.0** (MCP/OAuth), **3.24.0** (MCP tool names), **3.26.0** (MCP project tags), **3.29.0** (MCP JSON-RPC error/`board_get` identity), **3.30.0** (reversible per-project sprint capability), **3.31.0** (per-project priority tiers), **3.33.0** (Agenda ICS feeds need `SCRUMBOY_ENCRYPTION_KEY`), **3.33.12** (webhook destinations must be publicly routable), **3.35.0** (backup format 1.2; Trello closed-card titles) - see those releases.
+  `isService` flag marking a normal user-owned token for bot/automation use
+  rather than personal use; it does not create a separate service identity.
+  When an owner deletes a user (`DeleteUser`), all of
+  that user's service-token records are reassigned to the requesting owner;
+  active tokens are revoked in the same transaction and already-revoked
+  tokens retain their revocation time. The rows therefore do not cascade-delete
+  with either their original owner or a later custodian, preserving bot/CI
+  credential metadata for audit purposes even though (by design) any usable
+  secret must be re-minted by the new owner. Personal tokens are unaffected
+  and still deleted with their owner as before.
 
 ## [3.36.3] - 2026-09-20
 

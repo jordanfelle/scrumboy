@@ -269,6 +269,9 @@ func TestMeAPITokensCRUD(t *testing.T) {
 	if created["token"] == nil || created["token"].(string) == "" {
 		t.Fatal("expected non-empty token in create response")
 	}
+	if isService, ok := created["isService"].(bool); !ok || isService {
+		t.Fatalf("omitted isService = %#v, want false", created["isService"])
+	}
 	id := int64(created["id"].(float64))
 
 	var list map[string]any
@@ -279,6 +282,9 @@ func TestMeAPITokensCRUD(t *testing.T) {
 	items := list["items"].([]any)
 	if len(items) != 1 {
 		t.Fatalf("expected 1 token, got %d", len(items))
+	}
+	if isService, ok := items[0].(map[string]any)["isService"].(bool); !ok || isService {
+		t.Fatalf("listed omitted isService = %#v, want false", items[0].(map[string]any)["isService"])
 	}
 
 	resp, _ = doJSON(t, client, http.MethodDelete, fmt.Sprintf("%s/api/me/tokens/%d", ts.URL, id), nil, nil)
@@ -297,6 +303,38 @@ func TestMeAPITokensCRUD(t *testing.T) {
 	meta := items[0].(map[string]any)
 	if meta["revokedAt"] == nil {
 		t.Fatal("expected revokedAt on revoked token")
+	}
+}
+
+func TestMeAPITokensServiceFlagRoundTrips(t *testing.T) {
+	ts, _, cleanup := newTestHTTPServer(t, "full")
+	defer cleanup()
+	client := newCookieClient(t)
+	bootstrapUserClient(t, client, ts.URL, "Alice", "service-token@example.com", "password123")
+
+	var created map[string]any
+	resp, _ := doJSON(t, client, http.MethodPost, ts.URL+"/api/me/tokens", map[string]any{
+		"name":      "automation",
+		"isService": true,
+	}, &created)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("POST service /api/me/tokens: status=%d", resp.StatusCode)
+	}
+	if isService, ok := created["isService"].(bool); !ok || !isService {
+		t.Fatalf("created isService = %#v, want true", created["isService"])
+	}
+
+	var list map[string]any
+	resp, _ = doJSON(t, client, http.MethodGet, ts.URL+"/api/me/tokens", nil, &list)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/me/tokens: status=%d", resp.StatusCode)
+	}
+	items := list["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 token, got %d", len(items))
+	}
+	if isService, ok := items[0].(map[string]any)["isService"].(bool); !ok || !isService {
+		t.Fatalf("listed isService = %#v, want true", items[0].(map[string]any)["isService"])
 	}
 }
 

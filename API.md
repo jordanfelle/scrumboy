@@ -319,11 +319,13 @@ Manage opaque MCP/API tokens while logged in (session cookie). Mutating endpoint
 | `POST` | `/api/me/tokens` | `{ "name": "optional label", "isService": false }` | `201` JSON `{ "id", "name?", "createdAt", "token", "isService" }` — **`token` is shown only on create** |
 | `DELETE` | `/api/me/tokens/{id}` | — | `204` (revoke / soft-delete) |
 
-`isService` (optional, default `false`) flags the token as a bot/automation identity rather than a
-personal credential tied to this login. It doesn't change what the token can do while active. It
-changes what happens if this user account is later deleted: an owner's `DeleteUser` reassigns the
-departing user's active service tokens to the requesting owner **and revokes them in the same
-step**, instead of letting the row disappear entirely via cascade like a personal token. This keeps
+`isService` (optional, default `false`) marks a normal user-owned token for bot/automation use
+rather than personal use. It does not create a separate service identity or change what the token
+can do while active. It
+changes what happens if this user account is later deleted: an owner's `DeleteUser` reassigns all
+of the departing user's service-token records to the requesting owner, **revoking active tokens in
+the same step** and retaining the revocation time of tokens already revoked, instead of letting the
+rows disappear entirely via cascade like personal tokens. This keeps
 the token's audit record (name, `isService`, `createdAt`/`lastUsedAt`) alive under the new owner for
 offboarding/governance review, but the secret itself dies with its original holder — reassigning
 ownership without invalidating the secret would let the departing user go on authenticating as the
@@ -341,8 +343,8 @@ curl -b cookies.txt -X POST http://localhost:8080/api/me/tokens \
   -d '{"name":"Claude"}'
 ```
 
-Create a service token for unattended automation (e.g. a CI job), so it survives if the minting
-user's account is later removed:
+Create a service token for unattended automation (e.g. a CI job), so its metadata survives if the
+minting user's account is later removed:
 
 ```bash
 curl -b cookies.txt -X POST http://localhost:8080/api/me/tokens \

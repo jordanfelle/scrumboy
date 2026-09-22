@@ -403,6 +403,56 @@ VALUES (1, 1, 1, 'existing', '', 'backlog', 1000, ?, ?)`, now, now); err != nil 
 	}
 }
 
+func TestMigration072DefaultsExistingAPITokensToPersonal(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openRawTestDB(t)
+	if _, err := sqlDB.ExecContext(ctx, `CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	const target = "072_add_api_token_service_flag.sql"
+	for _, migrationVersion := range embeddedMigrationVersions(t) {
+		if migrationVersion == target {
+			break
+		}
+		if err := applyOne(ctx, sqlDB, migrationVersion); err != nil {
+			t.Fatalf("apply %s: %v", migrationVersion, err)
+		}
+	}
+	now := time.Now().UTC().UnixMilli()
+	if _, err := sqlDB.ExecContext(ctx, `
+INSERT INTO users(id, email, name, password_hash, is_bootstrap, system_role, created_at)
+VALUES (1, 'legacy-token@example.com', 'Legacy', '!', 1, 'owner', ?)`, now); err != nil {
+		t.Fatalf("insert legacy user: %v", err)
+	}
+	if _, err := sqlDB.ExecContext(ctx, `
+INSERT INTO api_tokens(id, user_id, token_hash, name, created_at, last_used_at, revoked_at)
+VALUES (1, 1, 'legacy-hash', 'legacy', ?, NULL, NULL)`, now); err != nil {
+		t.Fatalf("insert legacy api token: %v", err)
+	}
+
+	if err := applyOne(ctx, sqlDB, target); err != nil {
+		t.Fatalf("apply %s: %v", target, err)
+	}
+	var isService bool
+	if err := sqlDB.QueryRowContext(ctx, `SELECT is_service FROM api_tokens WHERE id = 1`).Scan(&isService); err != nil {
+		t.Fatalf("read migrated token: %v", err)
+	}
+	if isService {
+		t.Fatal("existing API token migrated as service token; want personal")
+	}
+	if _, err := sqlDB.ExecContext(ctx, `
+INSERT INTO api_tokens(user_id, token_hash, name, created_at)
+VALUES (1, 'post-migration-hash', 'post migration', ?)`, now); err != nil {
+		t.Fatalf("insert token using database default: %v", err)
+	}
+	if err := sqlDB.QueryRowContext(ctx, `SELECT is_service FROM api_tokens WHERE token_hash = 'post-migration-hash'`).Scan(&isService); err != nil {
+		t.Fatalf("read defaulted token: %v", err)
+	}
+	if isService {
+		t.Fatal("database default created a service token; want personal")
+	}
+}
+
 func TestChronologicalTodoIndexSupportsLaneOrder(t *testing.T) {
 	sqlDB := openMigratedDB(t)
 
