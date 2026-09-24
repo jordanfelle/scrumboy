@@ -241,9 +241,14 @@ describe('settings-api-tokens', () => {
     expect(submitBtn.disabled).toBe(false);
   });
 
-  it('never shows ordinary success for a malformed 2xx create response, and best-effort revokes it if it has an id', async () => {
-    apiFetchMock.mockResolvedValueOnce({ id: 11, name: 'ghost', createdAt: '2026-01-01T00:00:00Z', isService: false }); // no token
-    apiFetchMock.mockResolvedValueOnce(undefined); // best-effort DELETE
+  it.each([
+    ['null response', null, null],
+    ['missing token with an id', { id: 11, name: 'ghost', createdAt: '2026-01-01T00:00:00Z', isService: false }, 11],
+    ['empty token', { id: 12, name: 'ghost', createdAt: '2026-01-01T00:00:00Z', isService: false, token: '' }, 12],
+    ['non-string token', { id: 13, name: 'ghost', createdAt: '2026-01-01T00:00:00Z', isService: false, token: 123 }, 13],
+  ] as const)('never shows ordinary success for a malformed 2xx create response: %s', async (_case, response, expectedRevokeId) => {
+    apiFetchMock.mockResolvedValueOnce(response);
+    if (expectedRevokeId !== null) apiFetchMock.mockResolvedValueOnce(undefined); // best-effort DELETE
     const rerender = vi.fn().mockResolvedValue(undefined);
 
     document.body.innerHTML = `
@@ -261,8 +266,13 @@ describe('settings-api-tokens', () => {
     await flushPromises();
 
     expect(document.getElementById('apiTokenCreatedDisplay')).toBeNull();
+    expect(showToastMock).toHaveBeenCalledWith('Token creation returned an unexpected response. A token may have been created — check your list and revoke it if unused.');
     expect(showToastMock).not.toHaveBeenCalledWith('Token created.');
-    expect(apiFetchMock).toHaveBeenCalledWith('/api/me/tokens/11', { method: 'DELETE' });
+    if (expectedRevokeId === null) {
+      expect(apiFetchMock).toHaveBeenCalledTimes(1);
+    } else {
+      expect(apiFetchMock).toHaveBeenCalledWith(`/api/me/tokens/${expectedRevokeId}`, { method: 'DELETE' });
+    }
     expect(rerender).toHaveBeenCalledTimes(1);
   });
 
@@ -330,9 +340,10 @@ describe('settings-api-tokens', () => {
     expect(rerender).not.toHaveBeenCalled();
   });
 
-  it('shows an error toast when revoking fails', async () => {
-    showConfirmDialogMock.mockResolvedValueOnce(true);
+  it('re-enables the revoke button after a non-404 failure so the user can retry', async () => {
+    showConfirmDialogMock.mockResolvedValue(true);
     apiFetchMock.mockRejectedValueOnce(new Error('server exploded'));
+    apiFetchMock.mockResolvedValueOnce(undefined);
     const rerender = vi.fn().mockResolvedValue(undefined);
 
     document.body.innerHTML = `
@@ -340,11 +351,46 @@ describe('settings-api-tokens', () => {
     `;
     bindApiTokensInteractions({ signal: new AbortController().signal, rerender });
 
-    document.querySelector('[data-action="revoke-api-token"]')?.dispatchEvent(new Event('click', { bubbles: true }));
+    const btn = document.querySelector('[data-action="revoke-api-token"]');
+    if (!(btn instanceof HTMLButtonElement)) throw new Error('missing revoke button');
+    btn.dispatchEvent(new Event('click', { bubbles: true }));
     await flushPromises();
 
     expect(rerender).not.toHaveBeenCalled();
     expect(showToastMock).toHaveBeenCalledWith('server exploded');
+    expect(btn.disabled).toBe(false);
+
+    btn.dispatchEvent(new Event('click', { bubbles: true }));
+    await flushPromises();
+
+    expect(apiFetchMock).toHaveBeenCalledTimes(2);
+    expect(showToastMock).toHaveBeenCalledWith('Token revoked.');
+    expect(rerender).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['a successful DELETE', null],
+    ['an already-revoked 404', Object.assign(new Error('not found'), { status: 404 })],
+  ])('keeps %s final when the best-effort rerender rejects', async (_case, deleteError) => {
+    showConfirmDialogMock.mockResolvedValueOnce(true);
+    if (deleteError) apiFetchMock.mockRejectedValueOnce(deleteError);
+    else apiFetchMock.mockResolvedValueOnce(undefined);
+    const rerender = vi.fn().mockRejectedValue(new Error('rerender exploded'));
+
+    document.body.innerHTML = `
+      <button data-action="revoke-api-token" data-token-id="42" data-token-name="CI pipeline">Revoke</button>
+    `;
+    bindApiTokensInteractions({ signal: new AbortController().signal, rerender });
+
+    const btn = document.querySelector('[data-action="revoke-api-token"]');
+    if (!(btn instanceof HTMLButtonElement)) throw new Error('missing revoke button');
+    btn.dispatchEvent(new Event('click', { bubbles: true }));
+    await flushPromises();
+
+    expect(showToastMock).toHaveBeenCalledWith('Token revoked.');
+    expect(showToastMock).not.toHaveBeenCalledWith('rerender exploded');
+    expect(showToastMock).not.toHaveBeenCalledWith('Failed to revoke token.');
+    expect(btn.disabled).toBe(true);
   });
 
   it('does not issue a second DELETE for the same token while the first confirmed revoke is still pending', async () => {
@@ -415,5 +461,31 @@ describe('settings-api-tokens', () => {
     expect(apiFetchMock).not.toHaveBeenCalled(); // still cached — B's result, not A's
     expect(cachedHtml).toContain('data-token-id="99"');
     expect(cachedHtml).not.toContain('data-token-id="1"');
+  });
+
+  it('discards a stale in-flight GET rejection after a newer generation succeeds', async () => {
+    let rejectStale!: (reason: Error) => void;
+    apiFetchMock.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => { rejectStale = reject; }),
+    );
+
+    const stalePromise = renderApiTokensSectionHTML(); // GET A starts (old generation)
+
+    invalidateApiTokensCache();
+
+    apiFetchMock.mockResolvedValueOnce({ items: [{ id: 99 }] });
+    const freshHtml = await renderApiTokensSectionHTML(); // GET B succeeds (new generation)
+    expect(freshHtml).toContain('data-token-id="99"');
+
+    rejectStale(new Error('stale request failed')); // GET A rejects afterward
+    const recoveredStaleHtml = await stalePromise;
+
+    expect(recoveredStaleHtml).toContain('data-token-id="99"');
+    expect(recoveredStaleHtml).not.toContain('stale request failed');
+
+    apiFetchMock.mockClear();
+    const cachedHtml = await renderApiTokensSectionHTML();
+    expect(apiFetchMock).not.toHaveBeenCalled();
+    expect(cachedHtml).toContain('data-token-id="99"');
   });
 });

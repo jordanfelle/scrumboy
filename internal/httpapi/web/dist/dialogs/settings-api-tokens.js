@@ -37,7 +37,18 @@ async function loadApiTokens() {
     if (cachedApiTokens)
         return cachedApiTokens;
     const generation = apiTokensCacheGeneration;
-    const res = await apiFetch("/api/me/tokens");
+    let res;
+    try {
+        res = await apiFetch("/api/me/tokens");
+    }
+    catch (err) {
+        if (generation !== apiTokensCacheGeneration) {
+            // This failure belongs to a request invalidated while it was in flight.
+            // Do not let an obsolete error replace a newer generation's result.
+            return loadApiTokens();
+        }
+        throw err;
+    }
     if (generation !== apiTokensCacheGeneration) {
         // The cache was invalidated (by a create/revoke, possibly already repopulated
         // by a newer GET) while this request was in flight — this response is stale.
@@ -270,21 +281,27 @@ export function bindApiTokensInteractions({ signal, rerender }) {
             if (el instanceof HTMLButtonElement)
                 el.disabled = true;
             try {
-                await apiFetch(`/api/me/tokens/${encodeURIComponent(tokenId)}`, { method: "DELETE" });
-                invalidateApiTokensCache();
-                showToast(t("settings.profile.apiTokens.toast.revoked"));
-                await rerender();
-            }
-            catch (err) {
-                if (err?.status === 404) {
+                try {
+                    await apiFetch(`/api/me/tokens/${encodeURIComponent(tokenId)}`, { method: "DELETE" });
+                }
+                catch (err) {
+                    if (err?.status !== 404) {
+                        showToast(apiErrorMessageOrRaw(err, { fallbackKey: "settings.profile.apiTokens.toast.revokeFailed" }));
+                        if (el instanceof HTMLButtonElement)
+                            el.disabled = false;
+                        return;
+                    }
                     // Already revoked — by our own duplicate click, or another tab/session. The
                     // desired end state was already achieved, so treat it as success.
-                    invalidateApiTokensCache();
-                    showToast(t("settings.profile.apiTokens.toast.revoked"));
+                }
+                invalidateApiTokensCache();
+                showToast(t("settings.profile.apiTokens.toast.revoked"));
+                try {
                     await rerender();
                 }
-                else {
-                    showToast(apiErrorMessageOrRaw(err, { fallbackKey: "settings.profile.apiTokens.toast.revokeFailed" }));
+                catch {
+                    // Revocation is already final. Refreshing the surrounding settings UI is
+                    // best-effort and must not turn mutation success into a reported failure.
                 }
             }
             finally {
