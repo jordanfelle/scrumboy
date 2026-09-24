@@ -1330,7 +1330,7 @@
   "settings.profile.apiTokens.actions.revoke": "Revoca",
   "settings.profile.apiTokens.create.nameLabel": "Nome (opzionale)",
   "settings.profile.apiTokens.create.namePlaceholder": "es. pipeline CI",
-  "settings.profile.apiTokens.create.serviceLabel": "Token di servizio (il suo record sopravvive se questo account viene eliminato in seguito)",
+  "settings.profile.apiTokens.create.serviceLabel": "Token di servizio — se questo account viene eliminato, anche questo token viene eliminato; viene conservato solo un record di metadati per la revisione e un altro proprietario dovrà crearne uno nuovo",
   "settings.profile.apiTokens.create.submit": "Crea token",
   "settings.profile.apiTokens.create.creating": "Creazione…",
   "settings.profile.apiTokens.toast.created": "Token creato.",
@@ -1382,5 +1382,6 @@
   "settings.customization.boardFilterLayout.title": "Board filter layout",
   "settings.customization.boardFilterLayout.description": "Choose compact search-based tag discovery or the permanent tag and sprint pills.",
   "settings.customization.boardFilterLayout.omni": "Omni / compact filtering",
-  "settings.customization.boardFilterLayout.legacy": "Legacy pills"
+  "settings.customization.boardFilterLayout.legacy": "Legacy pills",
+  "settings.profile.apiTokens.toast.createMalformed": "La creazione del token ha restituito una risposta imprevista. Potrebbe essere stato creato un token: controlla l'elenco e revocalo se non utilizzato."
 }

@@ -10,11 +10,13 @@ type BindApiTokensInteractionsOptions = {
 
 let cachedApiTokens: ApiToken[] | null = null;
 let apiTokensLoadErrorMessage: string | null = null;
+let apiTokensCacheGeneration = 0;
 
 /** Drop the cached API token list so the Profile tab refetches on next render. */
 export function invalidateApiTokensCache(): void {
   cachedApiTokens = null;
   apiTokensLoadErrorMessage = null;
+  apiTokensCacheGeneration++;
 }
 
 const API_TOKEN_DATE_OPTS: Intl.DateTimeFormatOptions = {
@@ -43,7 +45,14 @@ function renderApiTokenStatusBadges(token: ApiToken): string {
 
 async function loadApiTokens(): Promise<ApiToken[]> {
   if (cachedApiTokens) return cachedApiTokens;
+  const generation = apiTokensCacheGeneration;
   const res = await apiFetch<{ items: ApiToken[] } | null>("/api/me/tokens");
+  if (generation !== apiTokensCacheGeneration) {
+    // The cache was invalidated (by a create/revoke, possibly already repopulated
+    // by a newer GET) while this request was in flight — this response is stale.
+    // Never let it clobber a fresher cache; read the current generation instead.
+    return loadApiTokens();
+  }
   cachedApiTokens = res?.items ?? [];
   return cachedApiTokens;
 }
@@ -110,7 +119,7 @@ export async function renderApiTokensSectionHTML(): Promise<string> {
         </label>
         <label class="api-tokens-create__service">
           <input type="checkbox" id="createApiTokenService" />
-          <span data-i18n-text="settings.profile.apiTokens.create.serviceLabel">Service token (its record survives if this account is later deleted)</span>
+          <span data-i18n-text="settings.profile.apiTokens.create.serviceLabel">Service token — if this account is deleted, this token is deleted too; only a metadata record is kept for review, and another owner must create a replacement</span>
         </label>
         <button type="submit" class="btn" id="createApiTokenSubmit" data-i18n-text="settings.profile.apiTokens.create.submit">Create token</button>
       </form>
@@ -169,6 +178,22 @@ function showApiTokenCreatedDialog(token: string): void {
   }
 }
 
+/**
+ * Best-effort revoke of a token whose secret we couldn't confirm was shown to the user
+ * (a malformed create response). Never lets a revoke failure surface as an error of its
+ * own — the caller already has its own warning to show regardless.
+ */
+async function bestEffortRevoke(tokenId: string | number): Promise<void> {
+  try {
+    await apiFetch(`/api/me/tokens/${encodeURIComponent(String(tokenId))}`, { method: "DELETE" });
+  } catch {
+    // Nothing more we can do here; the caller warns the user to review it manually.
+  }
+}
+
+/** Token ids with a revoke DELETE currently in flight, so a second confirmed click can't issue another. */
+const pendingRevokeTokenIds = new Set<string>();
+
 /** Wires up the create-token form and revoke buttons rendered by {@link renderApiTokensSectionHTML}. */
 export function bindApiTokensInteractions({ signal, rerender }: BindApiTokensInteractionsOptions): void {
   const createApiTokenForm = document.getElementById("createApiTokenForm") as HTMLFormElement | null;
@@ -181,28 +206,67 @@ export function bindApiTokensInteractions({ signal, rerender }: BindApiTokensInt
       const name = nameInput?.value.trim() || undefined;
       const isService = !!serviceInput?.checked;
 
-      if (submitBtn) {
-        submitBtn.disabled = true;
-        submitBtn.textContent = t("settings.profile.apiTokens.create.creating");
-      }
-      try {
-        const created = await apiFetch<ApiTokenCreateResponse>("/api/me/tokens", {
-          method: "POST",
-          body: JSON.stringify({ name, isService }),
-        });
-        invalidateApiTokensCache();
-        showToast(t("settings.profile.apiTokens.toast.created"));
-        await rerender();
-        if (created?.token) {
-          showApiTokenCreatedDialog(created.token);
-        }
-      } catch (err: any) {
-        showToast(apiErrorMessageOrRaw(err, { fallbackKey: "settings.profile.apiTokens.toast.createFailed" }));
+      const resetSubmitButton = () => {
         if (submitBtn) {
           submitBtn.disabled = false;
           submitBtn.textContent = t("settings.profile.apiTokens.create.submit");
         }
+      };
+
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = t("settings.profile.apiTokens.create.creating");
       }
+
+      let created: ApiTokenCreateResponse | null | undefined;
+      try {
+        created = await apiFetch<ApiTokenCreateResponse>("/api/me/tokens", {
+          method: "POST",
+          body: JSON.stringify({ name, isService }),
+        });
+      } catch (err: any) {
+        // The POST itself failed — no credential was created (or if it was, the caller
+        // never learned its id), so this is a genuine creation failure.
+        showToast(apiErrorMessageOrRaw(err, { fallbackKey: "settings.profile.apiTokens.toast.createFailed" }));
+        resetSubmitButton();
+        return;
+      }
+
+      const secret = created?.token;
+      const hasUsableSecret = typeof secret === "string" && secret.length > 0;
+
+      if (!hasUsableSecret) {
+        // A 2xx response without a usable secret: the server may still have created a
+        // live credential we can never show. Never report this as ordinary success.
+        invalidateApiTokensCache();
+        if (created?.id != null) {
+          await bestEffortRevoke(created.id);
+        }
+        showToast(t("settings.profile.apiTokens.toast.createMalformed"));
+        try {
+          await rerender();
+        } catch {
+          // Best-effort refresh only; the warning above already told the user to check.
+        }
+        resetSubmitButton();
+        return;
+      }
+
+      // We have a real, one-time secret. Show it immediately — before any further
+      // fallible work — so a rejected rerender() can never cause it to be lost or
+      // this successful creation to be reported as a failure.
+      invalidateApiTokensCache();
+      showToast(t("settings.profile.apiTokens.toast.created"));
+      showApiTokenCreatedDialog(secret);
+
+      try {
+        await rerender();
+      } catch {
+        // The token was created and its secret already shown to the user; a refresh
+        // failure here is a separate, lesser problem and must not be conflated with
+        // creation failure (the button stays reset below either way).
+      }
+      resetSubmitButton();
     }, { signal });
   }
 
@@ -211,6 +275,7 @@ export function bindApiTokensInteractions({ signal, rerender }: BindApiTokensInt
       const el = e.currentTarget as HTMLElement;
       const tokenId = el.getAttribute("data-token-id");
       if (!tokenId) return;
+      if (pendingRevokeTokenIds.has(tokenId)) return;
       const tokenName = el.getAttribute("data-token-name") || t("settings.profile.apiTokens.unnamed");
 
       const confirmed = await showConfirmDialog(
@@ -219,14 +284,29 @@ export function bindApiTokensInteractions({ signal, rerender }: BindApiTokensInt
         t("settings.profile.apiTokens.revoke.confirmAction"),
       );
       if (!confirmed) return;
+      // Re-check after the confirm dialog: another confirmed click could have started
+      // (and even finished) a DELETE for this same token while we were awaiting input.
+      if (pendingRevokeTokenIds.has(tokenId)) return;
 
+      pendingRevokeTokenIds.add(tokenId);
+      if (el instanceof HTMLButtonElement) el.disabled = true;
       try {
         await apiFetch(`/api/me/tokens/${encodeURIComponent(tokenId)}`, { method: "DELETE" });
         invalidateApiTokensCache();
         showToast(t("settings.profile.apiTokens.toast.revoked"));
         await rerender();
       } catch (err: any) {
-        showToast(apiErrorMessageOrRaw(err, { fallbackKey: "settings.profile.apiTokens.toast.revokeFailed" }));
+        if (err?.status === 404) {
+          // Already revoked — by our own duplicate click, or another tab/session. The
+          // desired end state was already achieved, so treat it as success.
+          invalidateApiTokensCache();
+          showToast(t("settings.profile.apiTokens.toast.revoked"));
+          await rerender();
+        } else {
+          showToast(apiErrorMessageOrRaw(err, { fallbackKey: "settings.profile.apiTokens.toast.revokeFailed" }));
+        }
+      } finally {
+        pendingRevokeTokenIds.delete(tokenId);
       }
     }, { signal });
   });

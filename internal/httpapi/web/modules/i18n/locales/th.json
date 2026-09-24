@@ -1330,7 +1330,7 @@
   "settings.profile.apiTokens.actions.revoke": "เพิกถอน",
   "settings.profile.apiTokens.create.nameLabel": "ชื่อ (ไม่บังคับ)",
   "settings.profile.apiTokens.create.namePlaceholder": "เช่น ไปป์ไลน์ CI",
-  "settings.profile.apiTokens.create.serviceLabel": "โทเคนบริการ (ข้อมูลจะยังคงอยู่หากบัญชีนี้ถูกลบในภายหลัง)",
+  "settings.profile.apiTokens.create.serviceLabel": "โทเคนบริการ — หากบัญชีนี้ถูกลบ โทเคนนี้จะถูกลบไปด้วย จะเก็บไว้เพียงบันทึกข้อมูลเมตาเพื่อการตรวจสอบ และเจ้าของรายอื่นต้องสร้างโทเคนใหม่แทน",
   "settings.profile.apiTokens.create.submit": "สร้างโทเคน",
   "settings.profile.apiTokens.create.creating": "กำลังสร้าง…",
   "settings.profile.apiTokens.toast.created": "สร้างโทเคนแล้ว",
@@ -1382,5 +1382,6 @@
   "settings.customization.boardFilterLayout.title": "Board filter layout",
   "settings.customization.boardFilterLayout.description": "Choose compact search-based tag discovery or the permanent tag and sprint pills.",
   "settings.customization.boardFilterLayout.omni": "Omni / compact filtering",
-  "settings.customization.boardFilterLayout.legacy": "Legacy pills"
+  "settings.customization.boardFilterLayout.legacy": "Legacy pills",
+  "settings.profile.apiTokens.toast.createMalformed": "การสร้างโทเคนได้รับการตอบกลับที่ไม่คาดคิด อาจมีการสร้างโทเคนแล้ว — โปรดตรวจสอบรายการของคุณและเพิกถอนหากไม่ได้ใช้งาน"
 }

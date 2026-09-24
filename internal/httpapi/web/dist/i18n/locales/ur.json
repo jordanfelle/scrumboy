@@ -1330,7 +1330,7 @@
   "settings.profile.apiTokens.actions.revoke": "منسوخ کریں",
   "settings.profile.apiTokens.create.nameLabel": "نام (اختیاری)",
   "settings.profile.apiTokens.create.namePlaceholder": "مثلاً CI پائپ لائن",
-  "settings.profile.apiTokens.create.serviceLabel": "سروس ٹوکن (اگر یہ اکاؤنٹ بعد میں حذف کر دیا جائے تو اس کا ریکارڈ باقی رہتا ہے)",
+  "settings.profile.apiTokens.create.serviceLabel": "سروس ٹوکن — اگر یہ اکاؤنٹ حذف کر دیا جائے تو یہ ٹوکن بھی حذف ہو جائے گا؛ صرف جائزے کے لیے میٹا ڈیٹا کا ریکارڈ رکھا جاتا ہے، اور کسی دوسرے مالک کو نیا بنانا ہوگا",
   "settings.profile.apiTokens.create.submit": "ٹوکن بنائیں",
   "settings.profile.apiTokens.create.creating": "بنایا جا رہا ہے…",
   "settings.profile.apiTokens.toast.created": "ٹوکن بن گیا۔",
@@ -1382,5 +1382,6 @@
   "settings.customization.boardFilterLayout.title": "Board filter layout",
   "settings.customization.boardFilterLayout.description": "Choose compact search-based tag discovery or the permanent tag and sprint pills.",
   "settings.customization.boardFilterLayout.omni": "Omni / compact filtering",
-  "settings.customization.boardFilterLayout.legacy": "Legacy pills"
+  "settings.customization.boardFilterLayout.legacy": "Legacy pills",
+  "settings.profile.apiTokens.toast.createMalformed": "ٹوکن بنانے پر غیر متوقع جواب موصول ہوا۔ ممکن ہے ٹوکن بن گیا ہو — اپنی فہرست چیک کریں اور اگر استعمال میں نہیں تو اسے منسوخ کریں۔"
 }

@@ -1330,7 +1330,7 @@
   "settings.profile.apiTokens.actions.revoke": "吠销",
   "settings.profile.apiTokens.create.nameLabel": "名称（可选）",
   "settings.profile.apiTokens.create.namePlaceholder": "例如：CI 流水线",
-  "settings.profile.apiTokens.create.serviceLabel": "服务令牌（即使该账户以后被删除，其记录也会保留）",
+  "settings.profile.apiTokens.create.serviceLabel": "服务令牌 — 如果此账户被删除，此令牌也会被删除；仅保留一条元数据记录以供审查，其他所有者需要创建替代令牌",
   "settings.profile.apiTokens.create.submit": "创建令牌",
   "settings.profile.apiTokens.create.creating": "正在创建…",
   "settings.profile.apiTokens.toast.created": "令牌已创建。",
@@ -1382,5 +1382,6 @@
   "settings.customization.boardFilterLayout.title": "Board filter layout",
   "settings.customization.boardFilterLayout.description": "Choose compact search-based tag discovery or the permanent tag and sprint pills.",
   "settings.customization.boardFilterLayout.omni": "Omni / compact filtering",
-  "settings.customization.boardFilterLayout.legacy": "Legacy pills"
+  "settings.customization.boardFilterLayout.legacy": "Legacy pills",
+  "settings.profile.apiTokens.toast.createMalformed": "创建令牌时返回了意外响应。可能已创建了一个令牌——请检查您的列表，如未使用请将其吊销。"
 }

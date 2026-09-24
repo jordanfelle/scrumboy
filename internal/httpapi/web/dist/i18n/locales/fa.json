@@ -1330,7 +1330,7 @@
   "settings.profile.apiTokens.actions.revoke": "لغو",
   "settings.profile.apiTokens.create.nameLabel": "نام (اختیاری)",
   "settings.profile.apiTokens.create.namePlaceholder": "مثلاً، خط لوله CI",
-  "settings.profile.apiTokens.create.serviceLabel": "توکن سرویس (رکورد آن حتی در صورت حذف بعدی این حساب باقی می‌ماند)",
+  "settings.profile.apiTokens.create.serviceLabel": "توکن سرویس — اگر این حساب حذف شود، این توکن هم حذف می‌شود؛ فقط یک رکورد فراداده برای بازبینی نگه‌داشته می‌شود و مالک دیگری باید جایگزینی بسازد",
   "settings.profile.apiTokens.create.submit": "ایجاد توکن",
   "settings.profile.apiTokens.create.creating": "در حال ایجاد…",
   "settings.profile.apiTokens.toast.created": "توکن ایجاد شد.",
@@ -1382,5 +1382,6 @@
   "settings.customization.boardFilterLayout.title": "Board filter layout",
   "settings.customization.boardFilterLayout.description": "Choose compact search-based tag discovery or the permanent tag and sprint pills.",
   "settings.customization.boardFilterLayout.omni": "Omni / compact filtering",
-  "settings.customization.boardFilterLayout.legacy": "Legacy pills"
+  "settings.customization.boardFilterLayout.legacy": "Legacy pills",
+  "settings.profile.apiTokens.toast.createMalformed": "ایجاد توکن پاسخ غیرمنتظره‌ای بازگرداند. ممکن است توکنی ایجاد شده باشد — فهرست خود را بررسی کنید و در صورت عدم استفاده آن را لغو کنید."
 }

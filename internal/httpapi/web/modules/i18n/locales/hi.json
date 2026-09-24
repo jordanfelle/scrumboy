@@ -1330,7 +1330,7 @@
   "settings.profile.apiTokens.actions.revoke": "निरस्त करें",
   "settings.profile.apiTokens.create.nameLabel": "नाम (वैकल्पिक)",
   "settings.profile.apiTokens.create.namePlaceholder": "जैसे, CI पाइपलाइन",
-  "settings.profile.apiTokens.create.serviceLabel": "सेवा टोकन (यदि यह खाता बाद में हटा दिया जाता है तो भी इसका रिकॉर्ड बना रहता है)",
+  "settings.profile.apiTokens.create.serviceLabel": "सर्विस टोकन — अगर यह खाता हटाया जाता है, तो यह टोकन भी हट जाएगा; केवल समीक्षा के लिए एक मेटाडेटा रिकॉर्ड रखा जाता है, और किसी अन्य स्वामी को नया बनाना होगा",
   "settings.profile.apiTokens.create.submit": "टोकन बनाएं",
   "settings.profile.apiTokens.create.creating": "बनाया जा रहा है…",
   "settings.profile.apiTokens.toast.created": "टोकन बनाया गया।",
@@ -1382,5 +1382,6 @@
   "settings.customization.boardFilterLayout.title": "Board filter layout",
   "settings.customization.boardFilterLayout.description": "Choose compact search-based tag discovery or the permanent tag and sprint pills.",
   "settings.customization.boardFilterLayout.omni": "Omni / compact filtering",
-  "settings.customization.boardFilterLayout.legacy": "Legacy pills"
+  "settings.customization.boardFilterLayout.legacy": "Legacy pills",
+  "settings.profile.apiTokens.toast.createMalformed": "टोकन बनाने पर अनपेक्षित प्रतिक्रिया मिली। हो सकता है कि टोकन बन गया हो — अपनी सूची जाँचें और अप्रयुक्त होने पर उसे रद्द करें।"
 }

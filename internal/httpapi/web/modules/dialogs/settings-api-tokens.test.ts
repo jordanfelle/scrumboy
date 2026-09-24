@@ -199,6 +199,73 @@ describe('settings-api-tokens', () => {
     });
   });
 
+  it('shows the checkbox copy that reflects the token being deleted, not scoped down, on account deletion', async () => {
+    apiFetchMock.mockResolvedValue({ items: [] });
+    const html = await renderApiTokensSectionHTML();
+    expect(html).toContain('if this account is deleted, this token is deleted too');
+    expect(html).not.toContain('its record survives');
+  });
+
+  it('still shows the created secret even when the post-create rerender rejects, and does not report it as a failure', async () => {
+    apiFetchMock.mockResolvedValueOnce({
+      id: 9,
+      name: 'new one',
+      createdAt: '2026-01-01T00:00:00Z',
+      isService: true,
+      token: 'sb_abcdef123456',
+    });
+    const rerender = vi.fn().mockRejectedValue(new Error('rerender exploded'));
+
+    document.body.innerHTML = `
+      <form id="createApiTokenForm">
+        <input type="text" id="createApiTokenName" value="new one" />
+        <input type="checkbox" id="createApiTokenService" checked />
+        <button type="submit" id="createApiTokenSubmit">Create token</button>
+      </form>
+    `;
+    bindApiTokensInteractions({ signal: new AbortController().signal, rerender });
+
+    const form = document.getElementById('createApiTokenForm');
+    if (!(form instanceof HTMLFormElement)) throw new Error('missing create form');
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flushPromises();
+
+    const secretInput = document.getElementById('apiTokenCreatedDisplay');
+    if (!(secretInput instanceof HTMLInputElement)) throw new Error('missing created-token secret display');
+    expect(secretInput.value).toBe('sb_abcdef123456');
+    expect(showToastMock).toHaveBeenCalledWith('Token created.');
+    expect(showToastMock).not.toHaveBeenCalledWith('Failed to create token.');
+
+    const submitBtn = document.getElementById('createApiTokenSubmit');
+    if (!(submitBtn instanceof HTMLButtonElement)) throw new Error('missing submit button');
+    expect(submitBtn.disabled).toBe(false);
+  });
+
+  it('never shows ordinary success for a malformed 2xx create response, and best-effort revokes it if it has an id', async () => {
+    apiFetchMock.mockResolvedValueOnce({ id: 11, name: 'ghost', createdAt: '2026-01-01T00:00:00Z', isService: false }); // no token
+    apiFetchMock.mockResolvedValueOnce(undefined); // best-effort DELETE
+    const rerender = vi.fn().mockResolvedValue(undefined);
+
+    document.body.innerHTML = `
+      <form id="createApiTokenForm">
+        <input type="text" id="createApiTokenName" value="ghost" />
+        <input type="checkbox" id="createApiTokenService" />
+        <button type="submit" id="createApiTokenSubmit">Create token</button>
+      </form>
+    `;
+    bindApiTokensInteractions({ signal: new AbortController().signal, rerender });
+
+    const form = document.getElementById('createApiTokenForm');
+    if (!(form instanceof HTMLFormElement)) throw new Error('missing create form');
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flushPromises();
+
+    expect(document.getElementById('apiTokenCreatedDisplay')).toBeNull();
+    expect(showToastMock).not.toHaveBeenCalledWith('Token created.');
+    expect(apiFetchMock).toHaveBeenCalledWith('/api/me/tokens/11', { method: 'DELETE' });
+    expect(rerender).toHaveBeenCalledTimes(1);
+  });
+
   it('re-enables the submit button and shows an error toast when creation fails', async () => {
     apiFetchMock.mockRejectedValueOnce(new Error('nope'));
     const rerender = vi.fn().mockResolvedValue(undefined);
@@ -278,5 +345,75 @@ describe('settings-api-tokens', () => {
 
     expect(rerender).not.toHaveBeenCalled();
     expect(showToastMock).toHaveBeenCalledWith('server exploded');
+  });
+
+  it('does not issue a second DELETE for the same token while the first confirmed revoke is still pending', async () => {
+    showConfirmDialogMock.mockResolvedValue(true);
+    let resolveDelete!: () => void;
+    apiFetchMock.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveDelete = () => resolve(undefined); }),
+    );
+    const rerender = vi.fn().mockResolvedValue(undefined);
+
+    document.body.innerHTML = `
+      <button data-action="revoke-api-token" data-token-id="42" data-token-name="CI pipeline">Revoke</button>
+    `;
+    bindApiTokensInteractions({ signal: new AbortController().signal, rerender });
+
+    const btn = document.querySelector('[data-action="revoke-api-token"]');
+    btn?.dispatchEvent(new Event('click', { bubbles: true }));
+    await flushPromises();
+    // First DELETE is now pending. A second confirmed click for the same token must not fire another.
+    btn?.dispatchEvent(new Event('click', { bubbles: true }));
+    await flushPromises();
+
+    expect(apiFetchMock).toHaveBeenCalledTimes(1);
+
+    resolveDelete();
+    await flushPromises();
+    expect(rerender).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a 404 on revoke as the token already being gone, not a failure', async () => {
+    showConfirmDialogMock.mockResolvedValueOnce(true);
+    const notFound = Object.assign(new Error('not found'), { status: 404 });
+    apiFetchMock.mockRejectedValueOnce(notFound);
+    const rerender = vi.fn().mockResolvedValue(undefined);
+
+    document.body.innerHTML = `
+      <button data-action="revoke-api-token" data-token-id="42" data-token-name="CI pipeline">Revoke</button>
+    `;
+    bindApiTokensInteractions({ signal: new AbortController().signal, rerender });
+
+    document.querySelector('[data-action="revoke-api-token"]')?.dispatchEvent(new Event('click', { bubbles: true }));
+    await flushPromises();
+
+    expect(showToastMock).toHaveBeenCalledWith('Token revoked.');
+    expect(showToastMock).not.toHaveBeenCalledWith('Failed to revoke token.');
+    expect(rerender).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards a stale in-flight GET so it cannot overwrite a newer cache written after invalidation', async () => {
+    let resolveStale!: (value: { items: { id: number }[] }) => void;
+    apiFetchMock.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveStale = resolve; }),
+    );
+
+    const stalePromise = renderApiTokensSectionHTML(); // GET A starts (old generation)
+
+    invalidateApiTokensCache(); // a create/revoke invalidates the cache mid-flight
+
+    apiFetchMock.mockResolvedValueOnce({ items: [{ id: 99 }] });
+    const freshHtml = await renderApiTokensSectionHTML(); // GET B starts and resolves first (new generation)
+    expect(freshHtml).toContain('data-token-id="99"');
+
+    resolveStale({ items: [{ id: 1 }] }); // GET A resolves afterward, with stale data
+    await stalePromise;
+
+    apiFetchMock.mockClear();
+    const cachedHtml = await renderApiTokensSectionHTML();
+    expect(apiFetchMock).not.toHaveBeenCalled(); // still cached — B's result, not A's
+    expect(cachedHtml).toContain('data-token-id="99"');
+    expect(cachedHtml).not.toContain('data-token-id="1"');
   });
 });

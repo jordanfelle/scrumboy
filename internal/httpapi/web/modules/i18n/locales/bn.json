@@ -1330,7 +1330,7 @@
   "settings.profile.apiTokens.actions.revoke": "প্রত্যাহার করুন",
   "settings.profile.apiTokens.create.nameLabel": "নাম (ঐচ্ছিক)",
   "settings.profile.apiTokens.create.namePlaceholder": "যেমন, CI পাইপলাইন",
-  "settings.profile.apiTokens.create.serviceLabel": "সার্ভিস টোকেন (এই অ্যাকাউন্ট পরে মুছে ফেলা হলেও এর রেকর্ড থেকে যায়)",
+  "settings.profile.apiTokens.create.serviceLabel": "সার্ভিস টোকেন — এই অ্যাকাউন্ট মুছে ফেলা হলে এই টোকেনও মুছে যাবে; শুধুমাত্র পর্যালোচনার জন্য একটি মেটাডেটা রেকর্ড রাখা হয়, এবং অন্য কোনো মালিককে একটি প্রতিস্থাপন তৈরি করতে হবে",
   "settings.profile.apiTokens.create.submit": "টোকেন তৈরি করুন",
   "settings.profile.apiTokens.create.creating": "তৈরি হচ্ছে…",
   "settings.profile.apiTokens.toast.created": "টোকেন তৈরি হয়েছে।",
@@ -1382,5 +1382,6 @@
   "settings.customization.boardFilterLayout.title": "Board filter layout",
   "settings.customization.boardFilterLayout.description": "Choose compact search-based tag discovery or the permanent tag and sprint pills.",
   "settings.customization.boardFilterLayout.omni": "Omni / compact filtering",
-  "settings.customization.boardFilterLayout.legacy": "Legacy pills"
+  "settings.customization.boardFilterLayout.legacy": "Legacy pills",
+  "settings.profile.apiTokens.toast.createMalformed": "টোকেন তৈরিতে একটি অপ্রত্যাশিত প্রতিক্রিয়া পাওয়া গেছে। একটি টোকেন তৈরি হয়ে থাকতে পারে — আপনার তালিকা পরীক্ষা করুন এবং অব্যবহৃত হলে তা বাতিল করুন।"
 }
