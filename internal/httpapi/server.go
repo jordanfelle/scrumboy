@@ -258,6 +258,7 @@ type storeAPI interface {
 
 	CountUsers(ctx context.Context) (int, error)
 	GetUser(ctx context.Context, userID int64) (store.User, error)
+	UserPublicIDs(ctx context.Context, ids ...int64) (map[int64]string, error)
 	GetUserPasswordHash(ctx context.Context, userID int64) (string, error)
 	UpdateUserImage(ctx context.Context, userID int64, image *string) error
 	UpdateUserPassword(ctx context.Context, userID int64, newPassword string) error
@@ -1162,6 +1163,54 @@ func (s *Server) publishAuthorizedCreatorNotification(ctx context.Context, autho
 	s.PublishEvent(ctx, eventbus.Event{
 		Type:      eventbus.TodoCreatorNotificationRecipientAuthorizedEventType,
 		ProjectID: authorized.ProjectID,
+		Payload:   payload,
+	})
+}
+
+// PublishTodoLifecycle emits todo.created/updated/moved/deleted through the event bus.
+// Designed to be passed to store.SetTodoLifecyclePublisher; the store calls it only after a
+// successful commit, so REST and MCP mutations publish identically. Stable user ids are
+// resolved best-effort: a lookup failure omits them rather than dropping the event.
+func (s *Server) PublishTodoLifecycle(ctx context.Context, e store.TodoLifecycleEvent) {
+	p := eventbus.TodoLifecyclePayload{
+		ProjectID:      e.Todo.ProjectID,
+		ProjectSlug:    e.ProjectSlug,
+		TodoID:         e.Todo.ID,
+		LocalID:        e.Todo.LocalID,
+		Title:          e.Todo.Title,
+		ColumnKey:      e.Todo.ColumnKey,
+		AssigneeUserID: e.Todo.AssigneeUserID,
+		ActorUserID:    e.ActorUserID,
+		ChangedFields:  e.ChangedFields,
+		FromColumnKey:  e.FromColumnKey,
+		ToColumnKey:    e.ToColumnKey,
+		FromColumnName: e.FromColumnName,
+		ToColumnName:   e.ToColumnName,
+	}
+	var ids []int64
+	if e.Todo.AssigneeUserID != nil {
+		ids = append(ids, *e.Todo.AssigneeUserID)
+	}
+	if e.ActorUserID != nil {
+		ids = append(ids, *e.ActorUserID)
+	}
+	if len(ids) > 0 {
+		if pub, err := s.store.UserPublicIDs(ctx, ids...); err == nil {
+			if e.Todo.AssigneeUserID != nil {
+				p.AssigneeStableUserID = pub[*e.Todo.AssigneeUserID]
+			}
+			if e.ActorUserID != nil {
+				p.ActorStableUserID = pub[*e.ActorUserID]
+			}
+		}
+	}
+	payload, err := json.Marshal(p)
+	if err != nil {
+		return
+	}
+	s.PublishEvent(ctx, eventbus.Event{
+		Type:      e.Type,
+		ProjectID: e.Todo.ProjectID,
 		Payload:   payload,
 	})
 }

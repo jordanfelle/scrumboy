@@ -324,6 +324,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				PublicProjectionChanged: true,
 			})
 		}
+		if !isAnonymousBoard {
+			s.publishTodoLifecycle(ctx, TodoLifecycleEvent{Type: TodoEventCreated, ProjectSlug: p.Slug, Todo: todo})
+		}
 		return todo, nil
 	}
 
@@ -500,11 +503,15 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 			if err := tx.Commit(); err != nil {
 				return Todo{}, fmt.Errorf("commit update todo: %w", err)
 			}
-			existing.MaterialChanged = existing.Body != in.Body
+			bodyChanged := existing.Body != in.Body
+			existing.MaterialChanged = bodyChanged
 			existing.Body = in.Body
 			existing.UpdatedAt = time.UnixMilli(nowMs).UTC()
 			if err := s.UpdateBoardActivity(ctx, existing.ProjectID); err != nil {
 				_ = err
+			}
+			if bodyChanged && !isAnonymousBoard {
+				s.publishTodoLifecycle(ctx, TodoLifecycleEvent{Type: TodoEventUpdated, ProjectSlug: p.Slug, Todo: existing, ChangedFields: []string{"body"}})
 			}
 			return existing, nil
 		case TodoEditFull:
@@ -845,6 +852,9 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 			PublicProjectionChanged: publicFieldsChanged,
 		})
 	}
+	if len(changedFields) > 0 && !isAnonymousBoard {
+		s.publishTodoLifecycle(ctx, TodoLifecycleEvent{Type: TodoEventUpdated, ProjectSlug: p.Slug, Todo: existing, ChangedFields: changedFields})
+	}
 
 	return existing, nil
 }
@@ -959,6 +969,9 @@ WHERE project_id = ? AND (from_local_id = ? OR to_local_id = ?)`,
 		_ = err // Log but don't fail
 	}
 
+	if !isAnonymousTemporaryBoard(p) {
+		s.publishTodoLifecycle(ctx, TodoLifecycleEvent{Type: TodoEventDeleted, ProjectSlug: p.Slug, Todo: existing})
+	}
 	return nil
 }
 
@@ -1066,6 +1079,15 @@ func (s *Store) MoveTodo(ctx context.Context, todoID int64, toColumnKey string, 
 	if doneAtMs != nil {
 		t := time.UnixMilli(*doneAtMs).UTC()
 		existing.DoneAt = &t
+	}
+
+	// todo.moved means the todo changed column; a reorder within the same column is not delivered.
+	if currentCol.Key != toColumnKey && !isAnonymousTemporaryBoard(p) {
+		s.publishTodoLifecycle(ctx, TodoLifecycleEvent{
+			Type: TodoEventMoved, ProjectSlug: p.Slug, Todo: existing,
+			FromColumnKey: currentCol.Key, ToColumnKey: toColumnKey,
+			FromColumnName: currentCol.Name, ToColumnName: targetCol.Name,
+		})
 	}
 
 	return existing, nil

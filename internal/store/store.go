@@ -19,10 +19,11 @@ type TodoAssignedMutationFacts struct {
 type TodoAssignedFunc func(ctx context.Context, projectID, todoID, localID int64, title, projectSlug, activityReason string, from, to *int64, actorUserID int64, facts TodoAssignedMutationFacts)
 
 type Store struct {
-	db                    *sql.DB
-	encryptionKey         []byte // 32-byte key for TOTP secret encryption; nil if 2FA encryption disabled
-	configuredOIDCIssuer  string
-	todoAssignedPublisher TodoAssignedFunc
+	db                     *sql.DB
+	encryptionKey          []byte // 32-byte key for TOTP secret encryption; nil if 2FA encryption disabled
+	configuredOIDCIssuer   string
+	todoAssignedPublisher  TodoAssignedFunc
+	todoLifecyclePublisher TodoLifecycleFunc
 }
 
 type StoreOptions struct {

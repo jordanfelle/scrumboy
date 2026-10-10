@@ -2,6 +2,19 @@
 
 > **Upgrades:** No breaking changes for **3.7.0 ≤ v ≤ 3.38.x** unless noted below. Notable upgrade impact: **3.22.0** (MCP/OAuth), **3.24.0** (MCP tool names), **3.26.0** (MCP project tags), **3.29.0** (MCP JSON-RPC error/`board_get` identity), **3.30.0** (reversible per-project sprint capability), **3.31.0** (per-project priority tiers), **3.33.0** (Agenda ICS feeds need `SCRUMBOY_ENCRYPTION_KEY`), **3.33.12** (webhook destinations must be publicly routable), **3.35.0** (backup format 1.2; Trello closed-card titles) - see those releases.
 
+## [Unreleased]
+
+### Added
+
+- **Todo lifecycle webhook events** - `todo.created`, `todo.updated`,
+  `todo.moved`, and `todo.deleted` are now delivered to subscribed
+  webhooks (or `*`). They are published from the store after a
+  successful commit, so REST and MCP mutations emit identically; no-op
+  updates and same-column reorders emit nothing and assignee-only changes stay
+  `todo.assigned` only. Payloads include `actorStableUserId` and
+  `assigneeStableUserId` (`users.public_id`) alongside the existing
+  integer ids. Delivery remains best-effort. See `docs/webhooks.md`.
+
 ## [3.38.3] - 2026-10-10
 
 ### Added

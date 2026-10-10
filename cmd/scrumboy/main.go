@@ -160,6 +160,7 @@ func main() {
 		TrustProxy:            cfg.TrustProxy,
 	})
 	st.SetTodoAssignedPublisher(srv.PublishTodoAssigned)
+	st.SetTodoLifecyclePublisher(srv.PublishTodoLifecycle)
 
 	httpServer := &http.Server{
 		Addr:              cfg.BindAddr,

@@ -73,6 +73,26 @@ Event names are **not** validated against a fixed allowlist at create time. Subs
 
 ---
 
+## Todo lifecycle events
+
+Besides `todo.assigned`, Scrumboy delivers four todo events. They are published from the store **after the mutation commits**, so a failed or rejected mutation never emits one, and the REST API and MCP tools behave identically. Temporary (anonymous) boards do not emit them.
+
+| Type | When | Extra payload fields |
+| ---- | ---- | -------------------- |
+| `todo.created` | A todo was created | none |
+| `todo.updated` | Title, body, sprint, estimation, priority, or tags actually changed | `changedFields` (subset of `title`, `body`, `sprint`, `estimation`, `priority`, `tags`) |
+| `todo.moved` | The todo changed column (a reorder within the same column is not delivered) | `fromColumnKey`, `toColumnKey`, `fromColumnName`, `toColumnName` |
+| `todo.deleted` | A todo was deleted | none (fields describe its last state) |
+
+Common payload fields: `projectId`, `projectSlug`, `todoId`, `localId`, `title`, `columnKey`, `assigneeUserId`, `assigneeStableUserId`, `actorUserId`, `actorStableUserId`. The body of the todo is never included.
+
+- **Stable ids:** integer user ids are kept for compatibility, but SQLite can reuse them after a user is deleted. Key any external account link on `actorStableUserId` / `assigneeStableUserId` (the same value as `stableUserId` from the MCP `me_get` tool).
+- **No duplicates:** a no-op update or same-column reorder emits nothing, and an assignee-only change is delivered as `todo.assigned` only (not also as `todo.updated`). Creating a todo that already has an assignee emits both `todo.created` and `todo.assigned`.
+- **Not guaranteed:** delivery stays best-effort (in-memory queue); see [Delivery and retry behavior](#delivery-and-retry-behavior).
+- Internal events such as `board.refresh_needed` are still never delivered.
+
+---
+
 ## Payloads and idempotency
 
 Each delivery is an HTTP `POST` with `Content-Type: application/json; charset=utf-8` and a JSON body shaped like:
