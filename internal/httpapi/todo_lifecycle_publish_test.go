@@ -35,8 +35,15 @@ func TestPublishTodoLifecycle_PayloadsCarryStableIDs(t *testing.T) {
 	srv, st, collector := newTestServerWithCollector(t)
 	st.SetTodoLifecyclePublisher(srv.PublishTodoLifecycle)
 	ctx, owner, project := setupAuthenticatedProject(t, st)
+	assignee, err := st.CreateUser(context.Background(), "stable-assignee@example.com", "pass1234A!", "Stable Assignee")
+	if err != nil {
+		t.Fatalf("create assignee: %v", err)
+	}
+	if err := st.AddProjectMember(ctx, owner.ID, project.ID, assignee.ID, store.RoleContributor); err != nil {
+		t.Fatalf("add assignee: %v", err)
+	}
 
-	pub, err := st.UserPublicIDs(context.Background(), owner.ID, 987654)
+	pub, err := st.UserPublicIDs(context.Background(), owner.ID, assignee.ID, 987654)
 	if err != nil {
 		t.Fatalf("public ids: %v", err)
 	}
@@ -48,12 +55,12 @@ func TestPublishTodoLifecycle_PayloadsCarryStableIDs(t *testing.T) {
 	}
 
 	todo, err := st.CreateTodo(ctx, project.ID, store.CreateTodoInput{
-		Title: "t", ColumnKey: store.DefaultColumnBacklog, AssigneeUserID: &owner.ID,
+		Title: "t", ColumnKey: store.DefaultColumnBacklog, AssigneeUserID: &assignee.ID,
 	}, store.ModeFull)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := st.UpdateTodo(ctx, todo.ID, store.UpdateTodoInput{Title: "t2", AssigneeUserID: &owner.ID}, store.ModeFull); err != nil {
+	if _, err := st.UpdateTodo(ctx, todo.ID, store.UpdateTodoInput{Title: "t2", AssigneeUserID: &assignee.ID}, store.ModeFull); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	if _, err := st.MoveTodo(ctx, todo.ID, store.DefaultColumnDoing, nil, nil, store.ModeFull); err != nil {
@@ -74,7 +81,7 @@ func TestPublishTodoLifecycle_PayloadsCarryStableIDs(t *testing.T) {
 		if p.ActorUserID == nil || *p.ActorUserID != owner.ID || p.ActorStableUserID != pub[owner.ID] {
 			t.Fatalf("%s actor=%v stable=%q want stable=%q", typ, p.ActorUserID, p.ActorStableUserID, pub[owner.ID])
 		}
-		if p.AssigneeUserID == nil || p.AssigneeStableUserID != pub[owner.ID] {
+		if p.AssigneeUserID == nil || *p.AssigneeUserID != assignee.ID || p.AssigneeStableUserID != pub[assignee.ID] {
 			t.Fatalf("%s assignee=%v stable=%q", typ, p.AssigneeUserID, p.AssigneeStableUserID)
 		}
 	}
@@ -83,6 +90,66 @@ func TestPublishTodoLifecycle_PayloadsCarryStableIDs(t *testing.T) {
 	}
 	if p := got["todo.moved"]; p.FromColumnKey != store.DefaultColumnBacklog || p.ToColumnKey != store.DefaultColumnDoing || p.ColumnKey != store.DefaultColumnDoing {
 		t.Fatalf("moved=%+v", p)
+	}
+}
+
+func TestPublishTodoLifecycle_StableIdentitySurvivesPostCommitUserIDReuse(t *testing.T) {
+	srv, st, collector := newTestServerWithCollector(t)
+	ownerCtx, owner, project := setupAuthenticatedProject(t, st)
+	actor, err := st.CreateUser(context.Background(), "event-actor@example.com", "pass1234A!", "Event Actor")
+	if err != nil {
+		t.Fatalf("create actor: %v", err)
+	}
+	if err := st.AddProjectMember(ownerCtx, owner.ID, project.ID, actor.ID, store.RoleMaintainer); err != nil {
+		t.Fatalf("add actor: %v", err)
+	}
+	original, err := st.UserPublicIDs(context.Background(), actor.ID)
+	if err != nil || original[actor.ID] == "" {
+		t.Fatalf("original stable id: ids=%v err=%v", original, err)
+	}
+
+	var replacementStableID string
+	st.SetTodoLifecyclePublisher(func(ctx context.Context, event store.TodoLifecycleEvent) {
+		// The store has committed before invoking this callback. Delete the actor
+		// and force SQLite to reuse the same integer id before projecting JSON.
+		if err := st.DeleteUser(context.Background(), owner.ID, actor.ID); err != nil {
+			t.Fatalf("delete original actor: %v", err)
+		}
+		replacement, err := st.CreateUser(context.Background(), "replacement@example.com", "pass1234A!", "Replacement")
+		if err != nil {
+			t.Fatalf("create replacement: %v", err)
+		}
+		if replacement.ID != actor.ID {
+			t.Fatalf("replacement id=%d want reused id %d", replacement.ID, actor.ID)
+		}
+		replacementIDs, err := st.UserPublicIDs(context.Background(), replacement.ID)
+		if err != nil {
+			t.Fatalf("replacement stable id: %v", err)
+		}
+		replacementStableID = replacementIDs[replacement.ID]
+		srv.PublishTodoLifecycle(ctx, event)
+	})
+
+	actorCtx := store.WithUserID(context.Background(), actor.ID)
+	if _, err := st.CreateTodo(actorCtx, project.ID, store.CreateTodoInput{
+		Title: "captured identity", ColumnKey: store.DefaultColumnBacklog, AssigneeUserID: &actor.ID,
+	}, store.ModeFull); err != nil {
+		t.Fatalf("create todo: %v", err)
+	}
+
+	got := lifecyclePayloads(t, collector)
+	p, ok := got[store.TodoEventCreated]
+	if !ok {
+		t.Fatalf("missing todo.created: %v", got)
+	}
+	if replacementStableID == "" || replacementStableID == original[actor.ID] {
+		t.Fatalf("replacement stable id=%q original=%q", replacementStableID, original[actor.ID])
+	}
+	if p.ActorUserID == nil || *p.ActorUserID != actor.ID || p.AssigneeUserID == nil || *p.AssigneeUserID != actor.ID {
+		t.Fatalf("integer identities=%+v", p)
+	}
+	if p.ActorStableUserID != original[actor.ID] || p.AssigneeStableUserID != original[actor.ID] {
+		t.Fatalf("event stable ids actor=%q assignee=%q want original=%q (replacement=%q)", p.ActorStableUserID, p.AssigneeStableUserID, original[actor.ID], replacementStableID)
 	}
 }
 

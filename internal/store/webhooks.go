@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -110,14 +112,17 @@ func (s *Store) ListWebhooks(ctx context.Context, userID int64) ([]Webhook, erro
 	return out, rows.Err()
 }
 
-// ListWebhooksByProject returns all webhook subscriptions for a given project,
-// used by the delivery pipeline to match events against subscriptions.
+// ListWebhooksByProject returns subscriptions whose owner is currently an
+// authorized Maintainer of the project, used by the asynchronous delivery
+// pipeline to match events before enqueueing them.
 func (s *Store) ListWebhooksByProject(ctx context.Context, projectID int64) ([]WebhookRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, url, events_json, secret
-		FROM webhooks
-		WHERE project_id = ?
-	`, projectID)
+		SELECT w.id, w.url, w.events_json, w.secret
+		FROM webhooks w
+		JOIN users u ON u.id = w.user_id
+		JOIN project_members pm ON pm.project_id = w.project_id AND pm.user_id = w.user_id
+		WHERE w.project_id = ? AND pm.role IN (?, ?)
+	`, projectID, RoleMaintainer, RoleOwner)
 	if err != nil {
 		return nil, fmt.Errorf("list webhooks by project: %w", err)
 	}
@@ -141,6 +146,36 @@ type WebhookRow struct {
 	URL    string
 	Events []string
 	Secret *string
+}
+
+// WebhookDeliveryTarget is the authoritative destination and signing material
+// for a queued delivery. It is intentionally resolved again by the worker so a
+// queue entry cannot outlive the subscription or its owner's Maintainer access.
+type WebhookDeliveryTarget struct {
+	URL    string
+	Secret *string
+}
+
+// GetWebhookDeliveryTarget returns eligible=false unless the subscription,
+// owner account, and Maintainer+ project membership all still exist. Database
+// failures are returned separately so callers can fail closed without treating
+// a temporary lookup failure as authorization.
+func (s *Store) GetWebhookDeliveryTarget(ctx context.Context, webhookID int64) (WebhookDeliveryTarget, bool, error) {
+	var target WebhookDeliveryTarget
+	err := s.db.QueryRowContext(ctx, `
+		SELECT w.url, w.secret
+		FROM webhooks w
+		JOIN users u ON u.id = w.user_id
+		JOIN project_members pm ON pm.project_id = w.project_id AND pm.user_id = w.user_id
+		WHERE w.id = ? AND pm.role IN (?, ?)
+	`, webhookID, RoleMaintainer, RoleOwner).Scan(&target.URL, &target.Secret)
+	if errors.Is(err, sql.ErrNoRows) {
+		return WebhookDeliveryTarget{}, false, nil
+	}
+	if err != nil {
+		return WebhookDeliveryTarget{}, false, fmt.Errorf("authorize webhook delivery: %w", err)
+	}
+	return target, true, nil
 }
 
 func (s *Store) DeleteWebhook(ctx context.Context, userID, webhookID int64) error {

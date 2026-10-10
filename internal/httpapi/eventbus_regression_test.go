@@ -609,7 +609,10 @@ func TestWebhookWorker_SignatureHeader(t *testing.T) {
 
 	q := newWebhookQueue(log.New(io.Discard, "", 0))
 	client, publicURL := webhookClientToTestServer(t, ts, "hooks.example")
-	w := newWebhookWorkerWithClient(q, log.New(io.Discard, "", 0), client)
+	authorizer := webhookDeliveryAuthorizerFunc(func(context.Context, int64) (store.WebhookDeliveryTarget, bool, error) {
+		return store.WebhookDeliveryTarget{URL: publicURL + "/", Secret: &secret}, true, nil
+	})
+	w := newWebhookWorkerWithClient(authorizer, q, log.New(io.Discard, "", 0), client)
 
 	q.Enqueue(webhookDelivery{
 		WebhookID: 1,

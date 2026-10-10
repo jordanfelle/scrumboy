@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
@@ -12,20 +13,39 @@ import (
 	"time"
 
 	"scrumboy/internal/safehttp"
+	"scrumboy/internal/store"
 )
 
 var errWebhookRedirect = errors.New("webhook redirects are not allowed")
+var errWebhookIneligible = errors.New("webhook subscription is no longer eligible for delivery")
+
+type webhookDeliveryAuthorizer interface {
+	GetWebhookDeliveryTarget(context.Context, int64) (store.WebhookDeliveryTarget, bool, error)
+}
 
 type webhookWorker struct {
 	*retryWorker[webhookDelivery]
 }
 
-func newWebhookWorker(queue *webhookQueue, logger *log.Logger) *webhookWorker {
-	return newWebhookWorkerWithClient(queue, logger, newWebhookHTTPClient())
+func newWebhookWorker(authorizer webhookDeliveryAuthorizer, queue *webhookQueue, logger *log.Logger) *webhookWorker {
+	return newWebhookWorkerWithClient(authorizer, queue, logger, newWebhookHTTPClient())
 }
 
-func newWebhookWorkerWithClient(queue *webhookQueue, logger *log.Logger, client *http.Client) *webhookWorker {
+func newWebhookWorkerWithClient(authorizer webhookDeliveryAuthorizer, queue *webhookQueue, logger *log.Logger, client *http.Client) *webhookWorker {
 	send := func(d webhookDelivery) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		target, eligible, err := authorizer.GetWebhookDeliveryTarget(ctx, d.WebhookID)
+		if err != nil {
+			return err
+		}
+		if !eligible {
+			return errWebhookIneligible
+		}
+		// URL and secret copied into the queue are only hints for logging. Always
+		// send using the current authoritative subscription row.
+		d.URL = target.URL
+		d.Secret = target.Secret
 		return sendWebhook(client, d)
 	}
 	inner := newRetryWorker(queue, logger, "webhook", send)
@@ -55,7 +75,7 @@ func newWebhookHTTPClientWithDialer(d safehttp.Dialer) *http.Client {
 }
 
 func isPermanentWebhookError(err error) bool {
-	return errors.Is(err, safehttp.ErrForbidden) || errors.Is(err, errWebhookRedirect)
+	return errors.Is(err, safehttp.ErrForbidden) || errors.Is(err, errWebhookRedirect) || errors.Is(err, errWebhookIneligible)
 }
 
 func sendWebhook(client *http.Client, d webhookDelivery) error {

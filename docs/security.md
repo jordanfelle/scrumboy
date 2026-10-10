@@ -306,6 +306,7 @@ Assignee history uses a separate `todo_assignee_events` table (also append-orien
 ### Webhooks
 
 - Maintainers configure outbound HTTP URLs (`http`/`https` with a host). Optional shared secret produces `X-Scrumboy-Signature` (`sha256=` HMAC of the body).
+- Before every send attempt, Scrumboy reloads the subscription and requires its owner account to still exist and still hold Maintainer access to the project. This check also applies to previously queued events; missing/deleted/demoted records and authorization-check failures make no outbound request.
 - Delivery uses a small retry worker and timeouts; secrets are stored as configured (not hashed like session tokens) and omitted from list API responses.
 - Outbound delivery resolves the destination, refuses loopback/private/link-local/special-purpose addresses, and dials a vetted IP directly (the same classification used for Agenda ICS fetches). Redirects are not followed. `HTTP_PROXY`/`HTTPS_PROXY` are ignored for webhook delivery. Create-time URL checks reject literal unsafe hosts; **dial-time enforcement** is what protects already-stored URLs after upgrade.
 - Shutdown drains in-flight mail/webhook work as implemented in process lifecycle.

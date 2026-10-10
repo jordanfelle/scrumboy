@@ -281,6 +281,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			_ = tx.Rollback()
 			return Todo{}, fmt.Errorf("audit todo_created: %w", err)
 		}
+		var lifecycleIdentity todoLifecycleIdentitySnapshot
+		if !isAnonymousBoard {
+			lifecycleIdentity = captureTodoLifecycleIdentityTx(ctx, tx, in.AssigneeUserID)
+		}
 
 		if err := tx.Commit(); err != nil {
 			_ = tx.Rollback()
@@ -325,7 +329,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			})
 		}
 		if !isAnonymousBoard {
-			s.publishTodoLifecycle(ctx, TodoLifecycleEvent{Type: TodoEventCreated, ProjectSlug: p.Slug, Todo: todo})
+			event := TodoLifecycleEvent{Type: TodoEventCreated, ProjectSlug: p.Slug, Todo: todo}
+			lifecycleIdentity.apply(&event)
+			s.publishTodoLifecycle(ctx, event)
 		}
 		return todo, nil
 	}
@@ -441,6 +447,7 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 	if err != nil {
 		return Todo{}, err
 	}
+	originalTags := append([]string(nil), existing.Tags...)
 	p, err := s.getProjectForWriteTx(ctx, tx, existing.ProjectID, mode)
 	if err != nil {
 		return Todo{}, err
@@ -492,6 +499,7 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 			if len(in.Body) > 20000 {
 				return Todo{}, fmt.Errorf("%w: body too large", ErrValidation)
 			}
+			bodyChanged := existing.Body != in.Body
 			nowMs := time.Now().UTC().UnixMilli()
 			if _, err := tx.ExecContext(ctx, `UPDATE todos SET body = ?, updated_at = ? WHERE id = ?`,
 				in.Body, nowMs, todoID); err != nil {
@@ -500,10 +508,13 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 			if err := touchProject(ctx, tx, existing.ProjectID, nowMs); err != nil {
 				return Todo{}, err
 			}
+			var lifecycleIdentity todoLifecycleIdentitySnapshot
+			if bodyChanged && !isAnonymousBoard {
+				lifecycleIdentity = captureTodoLifecycleIdentityTx(ctx, tx, existing.AssigneeUserID)
+			}
 			if err := tx.Commit(); err != nil {
 				return Todo{}, fmt.Errorf("commit update todo: %w", err)
 			}
-			bodyChanged := existing.Body != in.Body
 			existing.MaterialChanged = bodyChanged
 			existing.Body = in.Body
 			existing.UpdatedAt = time.UnixMilli(nowMs).UTC()
@@ -511,7 +522,9 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 				_ = err
 			}
 			if bodyChanged && !isAnonymousBoard {
-				s.publishTodoLifecycle(ctx, TodoLifecycleEvent{Type: TodoEventUpdated, ProjectSlug: p.Slug, Todo: existing, ChangedFields: []string{"body"}})
+				event := TodoLifecycleEvent{Type: TodoEventUpdated, ProjectSlug: p.Slug, Todo: existing, ChangedFields: []string{"body"}}
+				lifecycleIdentity.apply(&event)
+				s.publishTodoLifecycle(ctx, event)
 			}
 			return existing, nil
 		case TodoEditFull:
@@ -752,8 +765,8 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 	if !sameStringPtr(existing.PriorityKey, effectivePriorityKey) {
 		changedFields = append(changedFields, "priority")
 	}
-	existingTags := make(map[string]struct{}, len(existing.Tags))
-	for _, t := range existing.Tags {
+	existingTags := make(map[string]struct{}, len(originalTags))
+	for _, t := range originalTags {
 		existingTags[t] = struct{}{}
 	}
 	inTags := make(map[string]struct{}, len(tags))
@@ -766,7 +779,7 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 			tagsAdded = append(tagsAdded, t)
 		}
 	}
-	for _, t := range existing.Tags {
+	for _, t := range originalTags {
 		if _, ok := inTags[t]; !ok {
 			tagsRemoved = append(tagsRemoved, t)
 		}
@@ -816,6 +829,10 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 			return Todo{}, fmt.Errorf("audit todo_updated: %w", err)
 		}
 	}
+	var lifecycleIdentity todoLifecycleIdentitySnapshot
+	if len(changedFields) > 0 && !isAnonymousBoard {
+		lifecycleIdentity = captureTodoLifecycleIdentityTx(ctx, tx, in.AssigneeUserID)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return Todo{}, fmt.Errorf("commit update todo: %w", err)
@@ -853,7 +870,9 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 		})
 	}
 	if len(changedFields) > 0 && !isAnonymousBoard {
-		s.publishTodoLifecycle(ctx, TodoLifecycleEvent{Type: TodoEventUpdated, ProjectSlug: p.Slug, Todo: existing, ChangedFields: changedFields})
+		event := TodoLifecycleEvent{Type: TodoEventUpdated, ProjectSlug: p.Slug, Todo: existing, ChangedFields: changedFields}
+		lifecycleIdentity.apply(&event)
+		s.publishTodoLifecycle(ctx, event)
 	}
 
 	return existing, nil
@@ -959,6 +978,10 @@ WHERE project_id = ? AND (from_local_id = ? OR to_local_id = ?)`,
 	if err := touchProject(ctx, tx, existing.ProjectID, nowMs); err != nil {
 		return err
 	}
+	var lifecycleIdentity todoLifecycleIdentitySnapshot
+	if !isAnonymousTemporaryBoard(p) {
+		lifecycleIdentity = captureTodoLifecycleIdentityTx(ctx, tx, existing.AssigneeUserID)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit delete todo: %w", err)
@@ -970,7 +993,9 @@ WHERE project_id = ? AND (from_local_id = ? OR to_local_id = ?)`,
 	}
 
 	if !isAnonymousTemporaryBoard(p) {
-		s.publishTodoLifecycle(ctx, TodoLifecycleEvent{Type: TodoEventDeleted, ProjectSlug: p.Slug, Todo: existing})
+		event := TodoLifecycleEvent{Type: TodoEventDeleted, ProjectSlug: p.Slug, Todo: existing}
+		lifecycleIdentity.apply(&event)
+		s.publishTodoLifecycle(ctx, event)
 	}
 	return nil
 }
@@ -1059,6 +1084,10 @@ func (s *Store) MoveTodo(ctx context.Context, todoID int64, toColumnKey string, 
 	if err := insertAuditEventTx(ctx, tx, existing.ProjectID, actorUserID, "todo_moved", "todo", &todoID, meta); err != nil {
 		return Todo{}, fmt.Errorf("audit todo_moved: %w", err)
 	}
+	var lifecycleIdentity todoLifecycleIdentitySnapshot
+	if currentCol.Key != toColumnKey && !isAnonymousTemporaryBoard(p) {
+		lifecycleIdentity = captureTodoLifecycleIdentityTx(ctx, tx, existing.AssigneeUserID)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return Todo{}, fmt.Errorf("commit move todo: %w", err)
@@ -1083,11 +1112,13 @@ func (s *Store) MoveTodo(ctx context.Context, todoID int64, toColumnKey string, 
 
 	// todo.moved means the todo changed column; a reorder within the same column is not delivered.
 	if currentCol.Key != toColumnKey && !isAnonymousTemporaryBoard(p) {
-		s.publishTodoLifecycle(ctx, TodoLifecycleEvent{
+		event := TodoLifecycleEvent{
 			Type: TodoEventMoved, ProjectSlug: p.Slug, Todo: existing,
 			FromColumnKey: currentCol.Key, ToColumnKey: toColumnKey,
 			FromColumnName: currentCol.Name, ToColumnName: targetCol.Name,
-		})
+		}
+		lifecycleIdentity.apply(&event)
+		s.publishTodoLifecycle(ctx, event)
 	}
 
 	return existing, nil

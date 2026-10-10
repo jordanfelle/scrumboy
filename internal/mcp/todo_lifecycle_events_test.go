@@ -67,6 +67,10 @@ func TestTodoLifecycleEventsFromMCP(t *testing.T) {
 	if err := st.AddProjectMember(store.WithUserID(context.Background(), ownerID), ownerID, project.ID, assignee.ID, store.RoleContributor); err != nil {
 		t.Fatalf("add member: %v", err)
 	}
+	stableIDs, err := st.UserPublicIDs(context.Background(), ownerID, assignee.ID)
+	if err != nil {
+		t.Fatalf("stable ids: %v", err)
+	}
 	rec.drain()
 
 	call := func(tool string, args map[string]any) map[string]any {
@@ -94,6 +98,9 @@ func TestTodoLifecycleEventsFromMCP(t *testing.T) {
 	if evs[0].ActorUserID == nil || *evs[0].ActorUserID != ownerID || evs[0].ProjectSlug != project.Slug || evs[0].Todo.Title != "first" {
 		t.Fatalf("create event=%+v", evs[0])
 	}
+	if evs[0].ActorStableUserID != stableIDs[ownerID] || evs[0].AssigneeStableUserID != "" {
+		t.Fatalf("create stable identities=%+v", evs[0])
+	}
 
 	call("todos_update", map[string]any{"projectSlug": project.Slug, "localId": localID, "patch": map[string]any{"title": "renamed"}})
 	evs = rec.drain()
@@ -102,6 +109,9 @@ func TestTodoLifecycleEventsFromMCP(t *testing.T) {
 	}
 	if !reflect.DeepEqual(evs[0].ChangedFields, []string{"title"}) || evs[0].Todo.Title != "renamed" {
 		t.Fatalf("update event=%+v", evs[0])
+	}
+	if evs[0].ActorStableUserID != stableIDs[ownerID] || evs[0].AssigneeStableUserID != "" {
+		t.Fatalf("update stable identities=%+v", evs[0])
 	}
 
 	// No-op patch and assignee-only patch (delivered as todo.assigned, not todo.updated) emit nothing.
@@ -119,6 +129,9 @@ func TestTodoLifecycleEventsFromMCP(t *testing.T) {
 	if evs[0].FromColumnKey != "backlog" || evs[0].ToColumnKey != "doing" || evs[0].Todo.ColumnKey != "doing" {
 		t.Fatalf("move event=%+v", evs[0])
 	}
+	if evs[0].ActorStableUserID != stableIDs[ownerID] || evs[0].AssigneeStableUserID != stableIDs[assignee.ID] {
+		t.Fatalf("move stable identities=%+v", evs[0])
+	}
 
 	resp, out := callTodoUpdateMCP(t, client, ts.URL, "legacy", "todos_delete", map[string]any{"projectSlug": project.Slug, "localId": localID})
 	if resp.StatusCode != http.StatusOK {
@@ -130,5 +143,8 @@ func TestTodoLifecycleEventsFromMCP(t *testing.T) {
 	}
 	if evs[0].Todo.LocalID != localID || evs[0].Todo.Title != "renamed" {
 		t.Fatalf("delete event=%+v", evs[0])
+	}
+	if evs[0].ActorStableUserID != stableIDs[ownerID] || evs[0].AssigneeStableUserID != stableIDs[assignee.ID] {
+		t.Fatalf("delete stable identities=%+v", evs[0])
 	}
 }
