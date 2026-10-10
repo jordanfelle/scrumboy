@@ -509,6 +509,10 @@ Conventions:
 - **Input:** `{}`
 - **Output:** `data` with `userId`, `stableUserId`, `email`, `name`.
 - **Linking external accounts:** store `stableUserId`, not `userId`. `userId` is the internal integer key, and SQLite may reuse it for a different user after the original is deleted. `stableUserId` is a random UUID assigned once when the user is created (existing users were backfilled by migration 076) and never changed or reused.
+- **Identity is instance-scoped:** key a stored link on the pair (Scrumboy server's canonical origin, `stableUserId`), not on `stableUserId` alone. Use the origin the integration was configured with (the server's canonical public origin, `SCRUMBOY_PUBLIC_BASE_URL` when set, scheme + host + port) — never one taken from request headers such as `Host` or `X-Forwarded-*`.
+  - A `stableUserId` stays the same for the whole lifetime of the account on that server.
+  - It is unique within one database, not across installations: cloning or restoring an entire SQLite database keeps every existing UUID, so two installations can start out holding identical values for different (or diverging) accounts. The origin half of the key is what keeps them apart.
+  - If a server's canonical origin changes (new domain, scheme, or port), stored links keyed on the old origin no longer match; integrations must migrate those mappings to the new origin or have users relink.
 - **Errors:** anonymous mode or pre-bootstrap → `CAPABILITY_UNAVAILABLE`; no authenticated principal → `AUTH_REQUIRED`.
 
 ### `projects_list`

@@ -2,6 +2,44 @@
 
 > **Upgrades:** No breaking changes for **3.7.0 ≤ v ≤ 3.38.x** unless noted below. Notable upgrade impact: **3.22.0** (MCP/OAuth), **3.24.0** (MCP tool names), **3.26.0** (MCP project tags), **3.29.0** (MCP JSON-RPC error/`board_get` identity), **3.30.0** (reversible per-project sprint capability), **3.31.0** (per-project priority tiers), **3.33.0** (Agenda ICS feeds need `SCRUMBOY_ENCRYPTION_KEY`), **3.33.12** (webhook destinations must be publicly routable), **3.35.0** (backup format 1.2; Trello closed-card titles) - see those releases.
 
+## [3.38.3] - 2026-10-10
+
+### Added
+
+- **MCP `me_get` identity tool** - Returns the user the current
+  credential (session, API token, or OAuth access token) authenticates
+  as: `userId`, `stableUserId`, `email`, and `name`. Lets an external
+  client (for example a bot or integration) learn which Scrumboy user
+  its credential belongs to without guessing by email. Unavailable in
+  Anonymous Mode and before bootstrap (`CAPABILITY_UNAVAILABLE`);
+  unauthenticated callers get `AUTH_REQUIRED`. Served over both MCP
+  transports through the shared tool registry (legacy `/mcp` and
+  JSON-RPC `/mcp/rpc`); the documented tool count grows from 52 to 53.
+  See `API.md` and `docs/mcp.md`.
+- **Permanent per-user `stableUserId`** - `users.id` is a plain
+  `INTEGER PRIMARY KEY`, so SQLite can hand a deleted user's id to a
+  later user; integrations must not key external account links on it.
+  Migration 076 adds `users.public_id`: a random UUIDv4 backfilled for
+  existing users, issued to every new user by an insert trigger
+  (bootstrap, password, and OIDC paths included), guarded by a unique
+  index, made immutable by a trigger, and constrained to canonical
+  lowercase UUIDv4 by a column `CHECK`. `me_get` returns it as
+  `stableUserId`; `users.id` stays the internal key.
+
+### Compatibility / Operations
+
+- **Instance-scoped identity links** - Key a stored link on the pair
+  (server canonical origin, `stableUserId`), using the configured
+  origin (`SCRUMBOY_PUBLIC_BASE_URL` when set: scheme + host + port),
+  never a value taken from request headers such as `Host` or
+  `X-Forwarded-*`. A `stableUserId` never changes during the account's
+  lifetime, but cloning or restoring a whole SQLite database copies the
+  UUIDs, so separate installations can hold identical values; if the
+  server's canonical origin changes, stored mappings must be migrated
+  or users relinked.
+- **Migration 076 is additive** - Existing users keep their ids and
+  gain a `public_id`. No auth, board, API, or realtime behavior change.
+
 ## [3.38.2] - 2026-10-10
 
 ### Changed

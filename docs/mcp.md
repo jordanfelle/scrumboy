@@ -272,7 +272,7 @@ Exact names match `internal/mcp/registry.go` / `implementedTools()` (53 tools).
 **System**
 
 - `system_getCapabilities`
-- `me_get` — the user the credential authenticates as (`userId`, `stableUserId`, `email`, `name`); key external account links on `stableUserId`, since `userId` can be reused after a user is deleted
+- `me_get` — the user the credential authenticates as (`userId`, `stableUserId`, `email`, `name`); key external account links on `stableUserId`, since `userId` can be reused after a user is deleted. `stableUserId` is instance-scoped: persist it together with the server's canonical origin (as configured in the integration, not read from request headers). It never changes for the account's lifetime, but cloning or restoring a whole SQLite database copies the UUIDs, so separate installations can hold identical values; if the server's canonical origin changes, stored mappings must be migrated or relinked. See [`me_get` in API.md](../API.md#me_get).
 
 **Projects**
 

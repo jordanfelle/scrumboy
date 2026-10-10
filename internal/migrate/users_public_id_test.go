@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -99,6 +100,9 @@ func TestMigration076NewUsersGetAnIDAndItIsImmutable(t *testing.T) {
 	if _, err := sqlDB.ExecContext(ctx, `UPDATE users SET public_id = 'x' WHERE id = 1`); err == nil || !strings.Contains(err.Error(), "immutable") {
 		t.Fatalf("changing public_id: err = %v, want an immutability error", err)
 	}
+	if _, err := sqlDB.ExecContext(ctx, `UPDATE users SET public_id = ? WHERE id = 1`, "0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5b"); err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Fatalf("changing public_id to another valid UUIDv4: err = %v, want an immutability error", err)
+	}
 	if _, err := sqlDB.ExecContext(ctx, `UPDATE users SET public_id = NULL WHERE id = 1`); err == nil {
 		t.Fatal("clearing public_id must be rejected")
 	}
@@ -108,5 +112,92 @@ func TestMigration076NewUsersGetAnIDAndItIsImmutable(t *testing.T) {
 	// Two users can never share one.
 	if _, err := sqlDB.ExecContext(ctx, `INSERT INTO users(id, email, created_at, name, system_role, public_id) VALUES (9, 'd@example.com', ?, 'd', 'user', ?)`, now, first); err == nil {
 		t.Fatal("duplicate public_id insert must be rejected by the unique index")
+	}
+}
+
+func TestMigration076PublicIDCheckAcceptsOnlyCanonicalUUIDv4(t *testing.T) {
+	ctx := context.Background()
+	sqlDB := openMigratedDB(t)
+	now := time.Now().UTC().UnixMilli()
+
+	nextID := int64(0)
+	insertWith := func(publicID any) (int64, error) {
+		nextID++
+		_, err := sqlDB.ExecContext(ctx, `INSERT INTO users(id, email, created_at, name, system_role, public_id) VALUES (?, ?, ?, 'u', 'user', ?)`,
+			nextID, fmt.Sprintf("u%d@example.com", nextID), now, publicID)
+		return nextID, err
+	}
+	publicIDOf := func(id int64) string {
+		t.Helper()
+		var pid string
+		if err := sqlDB.QueryRowContext(ctx, `SELECT public_id FROM users WHERE id = ?`, id).Scan(&pid); err != nil {
+			t.Fatal(err)
+		}
+		return pid
+	}
+
+	// An explicit, valid, canonical UUIDv4 is stored as given; every variant nibble is accepted.
+	for _, valid := range []string{
+		"0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5b",
+		"0f8e2c4a-1b3d-4e5f-9a9b-0c1d2e3f4a5b",
+		"0f8e2c4a-1b3d-4e5f-aa9b-0c1d2e3f4a5b",
+		"0f8e2c4a-1b3d-4e5f-ba9b-0c1d2e3f4a5b",
+	} {
+		id, err := insertWith(valid)
+		if err != nil {
+			t.Fatalf("valid UUIDv4 %q rejected: %v", valid, err)
+		}
+		if got := publicIDOf(id); got != valid {
+			t.Fatalf("explicit public_id stored as %q, want %q", got, valid)
+		}
+	}
+
+	// NULL is allowed and replaced by a generated UUIDv4, which itself passes the CHECK.
+	id, err := insertWith(nil)
+	if err != nil {
+		t.Fatalf("NULL public_id rejected: %v", err)
+	}
+	if got := publicIDOf(id); !uuidV4.MatchString(got) {
+		t.Fatalf("NULL public_id was replaced with %q, want a generated UUIDv4", got)
+	}
+	// Omitting the column takes the same path; run it enough times that every random variant
+	// nibble the generator can produce has gone through the CHECK.
+	for i := 0; i < 200; i++ {
+		nextID++
+		if _, err := sqlDB.ExecContext(ctx, `INSERT INTO users(id, email, created_at, name, system_role) VALUES (?, ?, ?, 'u', 'user')`,
+			nextID, fmt.Sprintf("gen%d@example.com", i), now); err != nil {
+			t.Fatalf("insert without public_id (#%d): %v", i, err)
+		}
+		if got := publicIDOf(nextID); !uuidV4.MatchString(got) {
+			t.Fatalf("generated public_id %q is not a UUIDv4", got)
+		}
+	}
+
+	invalid := map[string]any{
+		"empty":                "",
+		"whitespace":           "                                    ",
+		"version 1":            "0f8e2c4a-1b3d-1e5f-8a9b-0c1d2e3f4a5b",
+		"version 7":            "0f8e2c4a-1b3d-7e5f-8a9b-0c1d2e3f4a5b",
+		"variant 0":            "0f8e2c4a-1b3d-4e5f-0a9b-0c1d2e3f4a5b",
+		"variant c":            "0f8e2c4a-1b3d-4e5f-ca9b-0c1d2e3f4a5b",
+		"variant uppercase B":  "0f8e2c4a-1b3d-4e5f-Ba9b-0c1d2e3f4a5b",
+		"uppercase hex":        "0F8E2C4A-1B3D-4E5F-8A9B-0C1D2E3F4A5B",
+		"mixed case":           "0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4A5b",
+		"too short":            "0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5",
+		"too long":             "0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5b0",
+		"no dashes":            "0f8e2c4a1b3d4e5f8a9b0c1d2e3f4a5b",
+		"braced":               "{0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5}",
+		"non-hex letter":       "0f8e2c4g-1b3d-4e5f-8a9b-0c1d2e3f4a5b",
+		"dash in hex position": "0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a-b",
+		"misplaced dash":       "0f8e2c4a1-b3d-4e5f-8a9b-0c1d2e3f4a5b",
+		"trailing space":       "0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5 ",
+		"non-ascii":            "0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5é",
+		"blob of a valid UUID": []byte("0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5c"),
+		"integer":              int64(42),
+	}
+	for name, v := range invalid {
+		if _, err := insertWith(v); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Errorf("%s: insert public_id %v: err = %v, want a CHECK constraint failure", name, v, err)
+		}
 	}
 }

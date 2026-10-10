@@ -56,3 +56,40 @@ func TestUserPublicID_NotReusedWhenIntegerIDIs(t *testing.T) {
 		t.Fatalf("successor reusing users.id %d inherited the deleted user's PublicID", successor.ID)
 	}
 }
+
+// Every account-creation path (bootstrap, password, OIDC) inserts without a public_id; the
+// migration's insert trigger must fill in a UUIDv4 that its CHECK constraint accepts.
+func TestUserPublicID_AssignedOnEveryCreationPath(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := newTestStore(t)
+	defer cleanup()
+	st.configuredOIDCIssuer = "https://issuer.example"
+
+	owner, err := st.BootstrapUser(ctx, "owner@example.com", "password123", "Owner")
+	if err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	local, err := st.CreateUser(ctx, "local@example.com", "password123", "Local")
+	if err != nil {
+		t.Fatalf("create password user: %v", err)
+	}
+	sso, err := st.CreateUserOIDC(ctx, st.configuredOIDCIssuer, st.configuredOIDCIssuer, "sub-1", "sso@example.com", "SSO")
+	if err != nil {
+		t.Fatalf("create OIDC user: %v", err)
+	}
+
+	seen := map[string]string{}
+	for name, id := range map[string]int64{"bootstrap": owner.ID, "password": local.ID, "oidc": sso.ID} {
+		u, err := st.GetUser(ctx, id)
+		if err != nil {
+			t.Fatalf("%s: get user: %v", name, err)
+		}
+		if !publicIDPattern.MatchString(u.PublicID) {
+			t.Fatalf("%s: PublicID = %q, want a UUIDv4", name, u.PublicID)
+		}
+		if other, dup := seen[u.PublicID]; dup {
+			t.Fatalf("%s and %s share PublicID %q", name, other, u.PublicID)
+		}
+		seen[u.PublicID] = name
+	}
+}

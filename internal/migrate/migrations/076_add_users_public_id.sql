@@ -9,8 +9,23 @@
 -- Existing users are backfilled here. New users get one from the insert trigger, so no insert
 -- path (password, bootstrap, OIDC, or any future one) can leave it NULL. A second trigger makes
 -- it immutable once set.
+--
+-- The CHECK accepts only NULL (filled in by the insert trigger) or a canonical lowercase UUIDv4,
+-- so an explicit INSERT cannot store an empty or malformed value. It is a column constraint rather
+-- than a trigger so it applies to every write, including the backfill and the insert trigger's own
+-- UPDATE, with no dependence on trigger order. GLOB is case-sensitive: the template pins the
+-- dashes, the version nibble and the variant nibble, and the character-class test rejects
+-- anything that is not lowercase hex or a dash.
 
-ALTER TABLE users ADD COLUMN public_id TEXT;
+ALTER TABLE users ADD COLUMN public_id TEXT CHECK (
+  public_id IS NULL OR (
+    typeof(public_id) = 'text'
+    AND length(public_id) = 36
+    AND public_id GLOB '????????-????-4???-[89ab]???-????????????'
+    AND public_id NOT GLOB '*[^0-9a-f-]*'
+    AND length(replace(public_id, '-', '')) = 32
+  )
+);
 
 UPDATE users
 SET public_id = lower(
