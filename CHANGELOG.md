@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [3.38.4] - 2026-10-10
+
 ### Added
 
 - **Todo lifecycle webhook events** - `todo.created`, `todo.updated`,
@@ -14,6 +16,16 @@
   `todo.assigned` only. Payloads include `actorStableUserId` and
   `assigneeStableUserId` (`users.public_id`) alongside the existing
   integer ids. Delivery remains best-effort. See `docs/webhooks.md`.
+
+### Fixed
+
+- **Continuous webhook delivery authorization** - A project webhook is
+  now eligible on every send attempt, not just at creation: the worker
+  reloads the subscription and requires its owner account to still exist
+  and still hold Maintainer access to the project. Revoked, deleted, or
+  demoted subscriptions are dropped without an outbound request, and
+  authorization-lookup failures fail closed. See `docs/webhooks.md` and
+  `docs/security.md`.
 
 ## [3.38.3] - 2026-10-10
 
