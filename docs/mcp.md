@@ -644,7 +644,7 @@ updated first, with project ID descending as the deterministic tie-breaker.
 
 (`todoItem` in `internal/mcp/types.go`; default column when omitted is `store.DefaultColumnBacklog` = **`backlog`** after `normalizeColumnKey` in `internal/mcp/adapter.go`.) Every field above is always present in MCP todo responses; optional values are explicit JSON `null` rather than omitted. **`archivedAt`** is an RFC3339 timestamp string when the story is archived and `null` when it is active.
 
-**3. `todos_update`** — required: `projectSlug`, `localId`, `patch` (object). Only fields present in `patch` are updated; some fields may be set to JSON `null` to clear where the store allows it. For `priorityKey`, omission preserves, `null` clears, and a string assigns a tier from the same project. Success data uses the same `todo` object shape as `todos_create` / `todos_get`.
+**3. `todos_update`** — required: `projectSlug`, `localId`, `patch` (object). Only fields present in `patch` are updated; some fields may be set to JSON `null` to clear where the store allows it. For `priorityKey`, omission preserves, `null` clears, and a string assigns a tier from the same project. For `dueAt`, omission preserves, `null` clears, and an RFC 3339 timestamp sets the due date. Success data uses the same `todo` object shape as `todos_create` / `todos_get`.
 
 ## Examples
 

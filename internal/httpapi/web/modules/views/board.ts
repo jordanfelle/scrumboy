@@ -65,6 +65,7 @@ import {
   buildOmniFilterRowHtml,
   buildTopbarHtml,
   buildPriorityTierMap,
+  buildDoneColumnKeys,
   getBoardColumns,
   visibleBoardLaneCount,
   renderVoiceCommandTriggerHtml,
@@ -619,6 +620,7 @@ export async function handleLoadMore(status: TodoStatus): Promise<void> {
         showPointsMode,
         selectedIds: getSelectedTodoIds(),
         priorityTiers: board ? buildPriorityTierMap(board) : undefined,
+        doneColumnKeys: board ? buildDoneColumnKeys(board) : undefined,
       };
       items.forEach((t) => {
         const card = document.createElement("div");
@@ -970,6 +972,7 @@ function updateBoardContent(board: Board, tags: readonly string[], search: strin
       showPointsMode,
       selectedIds: getSelectedTodoIds(),
       priorityTiers: buildPriorityTierMap(board),
+      doneColumnKeys: buildDoneColumnKeys(board),
     };
     const savedAgendaScroll = captureAgendaListScroll();
     boardEl.innerHTML =
@@ -1133,6 +1136,7 @@ function renderBoardFromData(board: Board, projectId: number, tags: readonly str
     showPointsMode,
     selectedIds: getSelectedTodoIds(),
     priorityTiers: buildPriorityTierMap(board),
+      doneColumnKeys: buildDoneColumnKeys(board),
   };
 
   app.innerHTML = `

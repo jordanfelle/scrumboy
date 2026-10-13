@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "Mata Anggaran",
   "todo.fields.priority": "Keutamaan",
   "todo.priority.none": "Tiada keutamaan",
+  "todo.fields.dueDate": "Tarikh akhir",
+  "todo.due.cardLabel": "Akhir {date}",
   "todo.fields.linkedStories": "Story Tertaut",
   "todo.fields.notes": "Catatan",
   "todo.fields.sprint": "Sprint",

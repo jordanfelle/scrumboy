@@ -43,7 +43,7 @@ import { canonicalEndpointForElement, formatWallStoryEndpoint, parseWallEdgeEndp
 import { clampCanvasCoord, ensureWallContent, fitToNotes, getWallContent, getViewportState, initWallViewport, screenToCanvas, setViewportState, teardownWallViewport, } from "./wall-viewport.js";
 import { bindWallNavigation, cancelWallNavigationGestures, isSpacePanArmed, } from "./wall-viewport-nav.js";
 import { getWallCanvasMode, isWallPanMode, loadWallCanvasMode, toggleWallCanvasMode, } from "./wall-canvas-mode.js";
-import { buildPriorityTierMap } from "../views/board-rendering.js";
+import { buildDoneColumnKeys, buildPriorityTierMap } from "../views/board-rendering.js";
 const TEARDOWN_MARKER = Symbol("wallMounted");
 const SELECT_MODE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-square-dashed-icon lucide-square-dashed"><path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M21 19a2 2 0 0 1-2 2"/><path d="M5 21a2 2 0 0 1-2-2"/><path d="M9 3h1"/><path d="M9 21h1"/><path d="M14 3h1"/><path d="M14 21h1"/><path d="M3 9v1"/><path d="M21 9v1"/><path d="M3 14v1"/><path d="M21 14v1"/></svg>`;
 const PAN_MODE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-hand-icon lucide-hand"><path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>`;
@@ -486,6 +486,7 @@ function wallCardRenderContext() {
             tagColors: getTagColors(),
             showPointsMode: board?.project?.estimationMode == null || board.project.estimationMode === "MODIFIED_FIBONACCI",
             priorityTiers: board ? buildPriorityTierMap(board) : undefined,
+            doneColumnKeys: board ? buildDoneColumnKeys(board) : undefined,
         },
     };
 }

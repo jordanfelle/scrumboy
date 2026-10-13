@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Todo due dates and "due soon" reminders** - A todo can carry an optional
+  `dueAt` (RFC 3339, UTC). It is settable in the todo dialog, on REST board
+  create/PATCH (`dueAt`; omitted preserves, `null` clears) and through MCP
+  `todos_create` / `todos_update`, appears on every todo payload and on board
+  cards (red once overdue, never for cards in a done column), and survives
+  backup export/import (`dueAt`, omitted when unset). A background scheduler
+  fires **one** reminder per due date when the todo enters its lead window
+  (default **24 hours**, configurable instance-wide with
+  `GET/PUT/DELETE /api/admin/settings/due-reminder`; `0` disables). Changing
+  `dueAt` starts a new cycle. Delivery: a `todo.due_soon` webhook event and an
+  email to the assignee (reusing the "Assigned to me" category behind the
+  master opt-in). Done, archived and temporary-board todos never fire, and a
+  due date already in the past when first seen is marked without a notice.
+  Includes migration `077_add_todo_due_at.sql`. See `docs/notifications.md`
+  and `docs/webhooks.md`.
+
 ## [3.38.5] - 2026-10-14
 
 ### Added

@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "추정 포인트",
   "todo.fields.priority": "우선순위",
   "todo.priority.none": "우선순위 없음",
+  "todo.fields.dueDate": "마감일",
+  "todo.due.cardLabel": "마감 {date}",
   "todo.fields.linkedStories": "연결된 스토리",
   "todo.fields.notes": "메모",
   "todo.fields.sprint": "스프린트",

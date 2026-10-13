@@ -322,6 +322,10 @@ type Todo struct {
 	UpdatedAt       time.Time
 	DoneAt          *time.Time // Last completion time (Unix ms). Set on transition into DONE; never cleared on reopen.
 	ArchivedAt      *time.Time // Orthogonal archival timestamp; NULL means active.
+	DueAt           *time.Time // Optional deadline; NULL means no due date.
+	// DueRemindedAt records when the "due soon" reminder fired for the current DueAt.
+	// It is reset whenever DueAt changes. Internal bookkeeping, never projected to clients.
+	DueRemindedAt *time.Time `json:"-"`
 
 	// AssignmentChanged is set when this mutation changed assignee handling: CreateTodo (initial assignee on create)
 	// or UpdateTodo (assignee field changed). Not persisted; used by callers to gate SSE emissions.

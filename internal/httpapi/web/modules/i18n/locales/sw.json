@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "Pointi za makadirio",
   "todo.fields.priority": "Kipaumbele",
   "todo.priority.none": "Hakuna kipaumbele",
+  "todo.fields.dueDate": "Tarehe ya mwisho",
+  "todo.due.cardLabel": "Mwisho {date}",
   "todo.fields.linkedStories": "Stories zilizounganishwa",
   "todo.fields.notes": "Maelezo",
   "todo.fields.sprint": "Sprint",

@@ -2,6 +2,7 @@ package todo
 
 import (
 	"context"
+	"time"
 
 	"scrumboy/internal/store"
 )
@@ -19,6 +20,7 @@ type CreateValues struct {
 	AssigneeUserID   *int64
 	SprintID         *int64
 	PriorityKey      *string
+	DueAt            *time.Time
 }
 
 // ResolvedCreatePosition carries internal todo-row identities (store.Todo.ID)
@@ -75,6 +77,7 @@ func MaterializeCreateInput(command CreateCommand) store.CreateTodoInput {
 		SprintID:         cloneCreateInt64Ptr(command.Values.SprintID),
 		AssigneeUserID:   cloneCreateInt64Ptr(command.Values.AssigneeUserID),
 		PriorityKey:      cloneCreateStringPtr(command.Values.PriorityKey),
+		DueAt:            cloneCreateTimePtr(command.Values.DueAt),
 		AfterID:          cloneCreateInt64Ptr(command.Position.AfterTodoID),
 		BeforeID:         cloneCreateInt64Ptr(command.Position.BeforeTodoID),
 	}
@@ -90,6 +93,14 @@ func cloneCreateStrings(values []string) []string {
 }
 
 func cloneCreateInt64Ptr(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneCreateTimePtr(value *time.Time) *time.Time {
 	if value == nil {
 		return nil
 	}

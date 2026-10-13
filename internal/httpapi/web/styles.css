@@ -5362,6 +5362,29 @@ label:has(input[type="radio"][name="importMode"]:disabled) {
 }
 
 
+.card__due {
+  flex-shrink: 0;
+  height: var(--s-20);
+  padding: 0 var(--s-8);
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--text);
+  font-size: var(--fs-11);
+  font-weight: 700;
+  line-height: calc(18px * var(--ui-scale));
+  white-space: nowrap;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.card__due--overdue {
+  border-color: rgba(239, 68, 68, 0.6);
+  background: rgba(239, 68, 68, 0.16);
+  color: #ef4444;
+}
+
 .card__drag-handle {
   display: flex;
   flex-shrink: 0;

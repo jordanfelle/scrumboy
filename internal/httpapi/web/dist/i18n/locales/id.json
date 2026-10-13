@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "Poin Estimasi",
   "todo.fields.priority": "Prioritas",
   "todo.priority.none": "Tidak ada prioritas",
+  "todo.fields.dueDate": "Tanggal jatuh tempo",
+  "todo.due.cardLabel": "Jatuh tempo {date}",
   "todo.fields.linkedStories": "Story Tertaut",
   "todo.fields.notes": "Catatan",
   "todo.fields.sprint": "Sprint",

@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "Điểm ước lượng",
   "todo.fields.priority": "Độ ưu tiên",
   "todo.priority.none": "Không có độ ưu tiên",
+  "todo.fields.dueDate": "Ngày hết hạn",
+  "todo.due.cardLabel": "Hạn {date}",
   "todo.fields.linkedStories": "Story liên kết",
   "todo.fields.notes": "Ghi chú",
   "todo.fields.sprint": "Sprint",

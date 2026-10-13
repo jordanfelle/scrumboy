@@ -83,6 +83,7 @@ type todoItem struct {
 	UpdatedAt        time.Time  `json:"updatedAt"`
 	DoneAt           *time.Time `json:"doneAt"`
 	ArchivedAt       *time.Time `json:"archivedAt"`
+	DueAt            *time.Time `json:"dueAt"`
 }
 
 // todoItemBrief is todoItem without the body (see todoResult).

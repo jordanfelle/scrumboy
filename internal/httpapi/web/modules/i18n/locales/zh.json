@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "估算点数",
   "todo.fields.priority": "优先级",
   "todo.priority.none": "无优先级",
+  "todo.fields.dueDate": "截止日期",
+  "todo.due.cardLabel": "截止 {date}",
   "todo.fields.linkedStories": "关联故事",
   "todo.fields.notes": "备注",
   "todo.fields.sprint": "Sprint",

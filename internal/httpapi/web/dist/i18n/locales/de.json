@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "Aufwandspunkte",
   "todo.fields.priority": "Priorität",
   "todo.priority.none": "Keine Priorität",
+  "todo.fields.dueDate": "Fälligkeitsdatum",
+  "todo.due.cardLabel": "Fällig {date}",
   "todo.fields.linkedStories": "Verknüpfte Stories",
   "todo.fields.notes": "Notizen",
   "todo.fields.sprint": "Sprint",

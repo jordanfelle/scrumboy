@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "คะแนนประเมิน",
   "todo.fields.priority": "ลำดับความสำคัญ",
   "todo.priority.none": "ไม่มีลำดับความสำคัญ",
+  "todo.fields.dueDate": "วันครบกำหนด",
+  "todo.due.cardLabel": "ครบกำหนด {date}",
   "todo.fields.linkedStories": "สตอรี่ที่เชื่อมโยง",
   "todo.fields.notes": "บันทึก",
   "todo.fields.sprint": "Sprint",

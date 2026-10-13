@@ -100,6 +100,7 @@ func toolCatalogDefinitions() map[string]mcpToolDef {
 				"sprintId":         jsonPropWithNull("integer", "Sprint ID to assign"),
 				"assigneeUserId":   jsonPropWithNull("integer", "User ID to assign"),
 				"priorityKey":      jsonPropWithNull("string", "Priority tier key to assign"),
+				"dueAt":            jsonPropWithNull("string", "Due date as an RFC 3339 timestamp (for example 2026-11-01T17:00:00Z)"),
 				"position": jsonObjectProp("Position hint within the target column", map[string]any{
 					"afterLocalId":  jsonPropWithNull("integer", "Place after this todo local ID"),
 					"beforeLocalId": jsonPropWithNull("integer", "Place before this todo local ID"),
@@ -141,6 +142,7 @@ func toolCatalogDefinitions() map[string]mcpToolDef {
 					"assigneeUserId":   jsonPropWithNull("integer", "Assignee user ID"),
 					"sprintId":         jsonPropWithNull("integer", "Sprint ID"),
 					"priorityKey":      jsonPropWithNull("string", "Priority tier key"),
+					"dueAt":            jsonPropWithNull("string", "Due date as an RFC 3339 timestamp; null clears it"),
 				}, nil),
 			}, []string{"projectSlug", "localId", "patch"}),
 		},

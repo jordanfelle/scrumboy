@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "Points d'estimation",
   "todo.fields.priority": "Priorité",
   "todo.priority.none": "Aucune priorité",
+  "todo.fields.dueDate": "Date d'échéance",
+  "todo.due.cardLabel": "Échéance {date}",
   "todo.fields.linkedStories": "Stories liées",
   "todo.fields.notes": "Notes",
   "todo.fields.sprint": "Sprint",

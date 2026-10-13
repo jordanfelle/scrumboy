@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "Pontos de esforço",
   "todo.fields.priority": "Prioridade",
   "todo.priority.none": "Sem prioridade",
+  "todo.fields.dueDate": "Data de vencimento",
+  "todo.due.cardLabel": "Vence {date}",
   "todo.fields.linkedStories": "Stories vinculadas",
   "todo.fields.notes": "Notas",
   "todo.fields.sprint": "Sprint",

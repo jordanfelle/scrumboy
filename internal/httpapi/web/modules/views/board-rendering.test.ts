@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Board } from '../types.js';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -425,5 +425,48 @@ describe('getBoardColumns workflow isolation', () => {
     };
 
     expect(getBoardColumns(value).map((column) => column.key)).toEqual(['backlog', 'doing', 'done']);
+  });
+});
+
+describe('renderTodoCard due date badge', () => {
+  const past = '2020-01-02T09:00:00Z';
+  const future = '2099-01-02T09:00:00Z';
+  const todo = (over: Record<string, unknown>) => ({
+    id: 1, localId: 1, title: 'Ship it', status: 'DOING', columnKey: 'doing', tags: [], ...over,
+  }) as never;
+  const doneKeys = new Set(['done']);
+
+  beforeAll(async () => {
+    const i18n = await import('../i18n/index.js');
+    await i18n.initI18n({
+      locale: 'en',
+      loadLocale: vi.fn(async () => enCatalog),
+    });
+  });
+
+  it('renders no badge without a due date', () => {
+    expect(renderTodoCard(todo({}), undefined, {}, { doneColumnKeys: doneKeys })).not.toContain('card__due');
+  });
+
+  it('renders a neutral badge for an upcoming due date', () => {
+    const html = renderTodoCard(todo({ dueAt: future }), undefined, {}, { doneColumnKeys: doneKeys });
+    expect(html).toContain('card__due');
+    expect(html).not.toContain('card__due--overdue');
+  });
+
+  it('marks an open card with a past due date as overdue', () => {
+    const html = renderTodoCard(todo({ dueAt: past }), undefined, {}, { doneColumnKeys: doneKeys });
+    expect(html).toContain('card__due card__due--overdue');
+  });
+
+  it('never marks a card in a done column as overdue', () => {
+    const html = renderTodoCard(todo({ dueAt: past, status: 'DONE', columnKey: 'done' }), undefined, {}, { doneColumnKeys: doneKeys });
+    expect(html).toContain('card__due');
+    expect(html).not.toContain('card__due--overdue');
+  });
+
+  it('ships styles for both badge states', () => {
+    expect(stylesSource).toContain('.card__due {');
+    expect(stylesSource).toContain('.card__due--overdue {');
   });
 });

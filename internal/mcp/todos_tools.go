@@ -6,21 +6,23 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	todoapp "scrumboy/internal/application/todo"
 	"scrumboy/internal/store"
 )
 
 type createTodoInput struct {
-	ProjectSlug      string   `json:"projectSlug"`
-	Title            string   `json:"title"`
-	Body             string   `json:"body"`
-	Tags             []string `json:"tags"`
-	ColumnKey        string   `json:"columnKey"`
-	EstimationPoints *int64   `json:"estimationPoints"`
-	SprintId         *int64   `json:"sprintId"`
-	AssigneeUserId   *int64   `json:"assigneeUserId"`
-	PriorityKey      *string  `json:"priorityKey"`
+	ProjectSlug      string     `json:"projectSlug"`
+	Title            string     `json:"title"`
+	Body             string     `json:"body"`
+	Tags             []string   `json:"tags"`
+	ColumnKey        string     `json:"columnKey"`
+	EstimationPoints *int64     `json:"estimationPoints"`
+	SprintId         *int64     `json:"sprintId"`
+	AssigneeUserId   *int64     `json:"assigneeUserId"`
+	PriorityKey      *string    `json:"priorityKey"`
+	DueAt            *time.Time `json:"dueAt"`
 	Position         *struct {
 		AfterLocalId  *int64 `json:"afterLocalId"`
 		BeforeLocalId *int64 `json:"beforeLocalId"`
@@ -107,6 +109,7 @@ func (a *Adapter) handleTodosCreate(ctx context.Context, input any) (any, map[st
 			AssigneeUserID:   in.AssigneeUserId,
 			SprintID:         in.SprintId,
 			PriorityKey:      in.PriorityKey,
+			DueAt:            in.DueAt,
 		},
 	}
 	if in.Position != nil {
@@ -480,6 +483,7 @@ func buildUpdatePatch(patchRaw json.RawMessage) (todoapp.UpdatePatch, *adapterEr
 		"assigneeUserId":   {},
 		"sprintId":         {},
 		"priorityKey":      {},
+		"dueAt":            {},
 	}
 	for key := range raw {
 		if _, ok := allowed[key]; !ok {
@@ -584,6 +588,18 @@ func buildUpdatePatch(patchRaw json.RawMessage) (todoapp.UpdatePatch, *adapterEr
 		}
 	}
 
+	if v, ok := raw["dueAt"]; ok {
+		if isNullJSON(v) {
+			patch.DueAt = todoapp.Field[*time.Time]{Present: true}
+		} else {
+			var dueAt time.Time
+			if err := json.Unmarshal(v, &dueAt); err != nil {
+				return todoapp.UpdatePatch{}, newAdapterError(http.StatusBadRequest, CodeValidationError, "invalid dueAt (expected an RFC 3339 timestamp)", map[string]any{"field": "dueAt"})
+			}
+			patch.DueAt = todoapp.Field[*time.Time]{Present: true, Value: &dueAt}
+		}
+	}
+
 	return patch, nil
 }
 
@@ -608,6 +624,7 @@ func todoToItem(projectSlug string, todo store.Todo) todoItem {
 		UpdatedAt:        todo.UpdatedAt,
 		DoneAt:           todo.DoneAt,
 		ArchivedAt:       todo.ArchivedAt,
+		DueAt:            todo.DueAt,
 	}
 }
 

@@ -1190,6 +1190,8 @@
   "todo.fields.estimationPoints": "[!! Estimation Points !!]",
   "todo.fields.priority": "[!! Priority !!]",
   "todo.priority.none": "[!! No priority !!]",
+  "todo.fields.dueDate": "[!! Due date !!]",
+  "todo.due.cardLabel": "[!! Due {date} !!]",
   "todo.fields.linkedStories": "[!! Linked Stories !!]",
   "todo.fields.notes": "[!! Notes !!]",
   "todo.fields.sprint": "[!! Sprint !!]",

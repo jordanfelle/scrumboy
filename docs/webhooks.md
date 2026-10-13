@@ -82,9 +82,10 @@ Besides `todo.assigned`, Scrumboy delivers four todo events. They are published 
 | Type | When | Extra payload fields |
 | ---- | ---- | -------------------- |
 | `todo.created` | A todo was created | none |
-| `todo.updated` | Title, body, sprint, estimation, priority, or tags actually changed | `changedFields` (subset of `title`, `body`, `sprint`, `estimation`, `priority`, `tags`) |
+| `todo.updated` | Title, body, sprint, estimation, priority, due date, or tags actually changed | `changedFields` (subset of `title`, `body`, `sprint`, `estimation`, `priority`, `due`, `tags`) |
 | `todo.moved` | The todo changed column (a reorder within the same column is not delivered) | `fromColumnKey`, `toColumnKey`, `fromColumnName`, `toColumnName` |
 | `todo.deleted` | A todo was deleted | none (fields describe its last state) |
+| `todo.due_soon` | A todo entered its reminder window (see below) | `dueAt` (RFC 3339 UTC), `leadHours` |
 
 Common payload fields: `projectId`, `projectSlug`, `todoId`, `localId`, `title`, `columnKey`, `assigneeUserId`, `assigneeStableUserId`, `actorUserId`, `actorStableUserId`. The body of the todo is never included.
 
@@ -92,6 +93,7 @@ Common payload fields: `projectId`, `projectSlug`, `todoId`, `localId`, `title`,
 - **No duplicates:** a no-op update or same-column reorder emits nothing, and an assignee-only change is delivered as `todo.assigned` only (not also as `todo.updated`). Creating a todo that already has an assignee emits both `todo.created` and `todo.assigned`.
 - **Not guaranteed:** delivery stays best-effort (in-memory queue); see [Delivery and retry behavior](#delivery-and-retry-behavior).
 - Internal events such as `board.refresh_needed` are still never delivered.
+- **`todo.due_soon`** is emitted by a background scheduler, not by a mutation: once per due date, when a todo's `dueAt` falls within the configured lead time (default 24 hours; `GET/PUT/DELETE /api/admin/settings/due-reminder`, `0` disables). Changing `dueAt` starts a new cycle. Todos in a done column, archived todos, temporary boards, and todos whose due date had already passed when first seen never emit it. Delivery is at most once per due date; a reminder missed during downtime is not replayed. Changing only `dueAt` also reports `due` in `todo.updated`'s `changedFields`.
 
 ---
 

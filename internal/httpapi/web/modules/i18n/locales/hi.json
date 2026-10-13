@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "अनुमान पॉइंट्स",
   "todo.fields.priority": "प्राथमिकता",
   "todo.priority.none": "कोई प्राथमिकता नहीं",
+  "todo.fields.dueDate": "नियत तारीख",
+  "todo.due.cardLabel": "देय {date}",
   "todo.fields.linkedStories": "लिंक की गई स्टोरीज़",
   "todo.fields.notes": "नोट्स",
   "todo.fields.sprint": "Sprint",

@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "امتیازهای تخمین",
   "todo.fields.priority": "اولویت",
   "todo.priority.none": "بدون اولویت",
+  "todo.fields.dueDate": "تاریخ سررسید",
+  "todo.due.cardLabel": "سررسید {date}",
   "todo.fields.linkedStories": "Storyهای لینک‌شده",
   "todo.fields.notes": "یادداشت‌ها",
   "todo.fields.sprint": "Sprint",

@@ -166,6 +166,8 @@ func (n *emailNotifier) OnEvent(ctx context.Context, e eventbus.Event) {
 	case "todo.assigned", "board.refresh_needed", "project.membership":
 		// Never block the fanout / SSE path — same pattern as pushNotifier and the webhook dispatcher.
 		go n.handle(context.WithoutCancel(ctx), e)
+	case eventbus.TodoDueSoonEventType:
+		go n.handleDueSoon(context.WithoutCancel(ctx), e)
 	case eventbus.TodoCreatorNotificationRecipientAuthorizedEventType:
 		// Reauthorize before queueing without blocking fanout. The worker repeats
 		// authorization and performs preference, destination, and rendering checks
@@ -206,6 +208,46 @@ func (n *emailNotifier) handleTodoAssigned(ctx context.Context, e eventbus.Event
 		LocalID: domain.LocalID,
 		Title:   domain.Title,
 	}, excluded)
+}
+
+// handleDueSoon emails the assignee that a card is about to come due. It reuses
+// the "assigned" category (cards assigned to me) behind the master opt-in, so no
+// preference schema change is needed. Unassigned cards have no recipient.
+func (n *emailNotifier) handleDueSoon(ctx context.Context, e eventbus.Event) {
+	var domain eventbus.TodoDueSoonPayload
+	if err := json.Unmarshal(e.Payload, &domain); err != nil || domain.AssigneeUserID == nil {
+		return
+	}
+	assigneeID := *domain.AssigneeUserID
+	pref, err := n.getPref(ctx, assigneeID)
+	if err != nil || !pref.Enabled || !pref.Assigned {
+		return
+	}
+	proj, err := n.store.GetProject(ctx, e.ProjectID)
+	if err != nil {
+		return
+	}
+	user, err := n.store.GetUser(ctx, assigneeID)
+	if err != nil || user.Email == "" {
+		return
+	}
+	dueAt, err := time.Parse(time.RFC3339, domain.DueAt)
+	if err != nil {
+		return
+	}
+
+	subject := fmt.Sprintf("Due soon: %s", domain.Title)
+	fields := []notificationField{{label: "Due", value: dueAt.UTC().Format("Mon, 02 Jan 2006 15:04 MST")}}
+	ctaLabel, ctaURL := "View project", n.projectURL(proj.Slug)
+	if card, ok := cardIdentity(domain.LocalID, domain.Title); ok {
+		fields = append(fields, notificationField{label: "Card", value: card})
+		ctaLabel, ctaURL = "View card", n.cardURL(proj.Slug, domain.LocalID)
+	}
+	fields = append(fields, notificationField{label: "Project", value: proj.Name})
+	body := formatPlainTextNotification(plainTextNotification{
+		heading: "Card due soon", fields: fields, ctaLabel: ctaLabel, ctaURL: ctaURL,
+	})
+	n.send(user.Email, subject, body, fmt.Sprintf("email-notify category=%s user=%d reason=due_soon", emailCategoryAssigned, assigneeID))
 }
 
 func (n *emailNotifier) handleAssignment(ctx context.Context, projectID int64, domain eventbus.TodoAssignedPayload) bool {

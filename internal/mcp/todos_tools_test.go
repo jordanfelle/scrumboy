@@ -148,3 +148,40 @@ func assertMCPUpdatePatchPointer(t *testing.T, name string, field todoapp.Field[
 		t.Fatalf("%s field = %+v, want present %d", name, field, want)
 	}
 }
+
+func TestBuildUpdatePatch_dueAt(t *testing.T) {
+	t.Parallel()
+
+	got, aerr := buildUpdatePatch(json.RawMessage(`{"title":"t"}`))
+	if aerr != nil {
+		t.Fatalf("buildUpdatePatch: %v", aerr)
+	}
+	if got.DueAt.Present {
+		t.Fatalf("omitted dueAt = %+v, want absent", got.DueAt)
+	}
+
+	got, aerr = buildUpdatePatch(json.RawMessage(`{"dueAt":"2026-11-01T17:00:00Z"}`))
+	if aerr != nil {
+		t.Fatalf("buildUpdatePatch(set): %v", aerr)
+	}
+	if !got.DueAt.Present || got.DueAt.Value == nil || got.DueAt.Value.UTC().Format("2006-01-02T15:04:05Z") != "2026-11-01T17:00:00Z" {
+		t.Fatalf("set dueAt = %+v", got.DueAt)
+	}
+	if !got.DueAt.Present || !(todoapp.UpdatePatch{DueAt: got.DueAt}).HasFields() {
+		t.Fatal("a dueAt-only patch must count as a present field")
+	}
+
+	got, aerr = buildUpdatePatch(json.RawMessage(`{"dueAt":null}`))
+	if aerr != nil {
+		t.Fatalf("buildUpdatePatch(null): %v", aerr)
+	}
+	if !got.DueAt.Present || got.DueAt.Value != nil {
+		t.Fatalf("null dueAt = %+v, want present nil", got.DueAt)
+	}
+
+	for _, bad := range []string{`{"dueAt":"tomorrow"}`, `{"dueAt":12345}`, `{"dueAt":true}`} {
+		if _, aerr := buildUpdatePatch(json.RawMessage(bad)); aerr == nil || aerr.Code != CodeValidationError {
+			t.Errorf("%s: err = %v, want validation error", bad, aerr)
+		}
+	}
+}

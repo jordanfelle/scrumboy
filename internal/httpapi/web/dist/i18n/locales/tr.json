@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "Tahmin puanları",
   "todo.fields.priority": "Öncelik",
   "todo.priority.none": "Öncelik yok",
+  "todo.fields.dueDate": "Bitiş tarihi",
+  "todo.due.cardLabel": "Bitiş {date}",
   "todo.fields.linkedStories": "Bağlı hikâyeler",
   "todo.fields.notes": "Notlar",
   "todo.fields.sprint": "Sprint",

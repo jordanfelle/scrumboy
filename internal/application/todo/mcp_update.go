@@ -139,6 +139,7 @@ func cloneMCPUpdateTodo(todo store.Todo) store.Todo {
 	todo.CreatedByUserID = cloneUpdateInt64Ptr(todo.CreatedByUserID)
 	todo.SprintID = cloneUpdateInt64Ptr(todo.SprintID)
 	todo.PriorityKey = cloneUpdateStringPtr(todo.PriorityKey)
+	todo.DueAt = cloneUpdateTimePtr(todo.DueAt)
 	if todo.DoneAt != nil {
 		doneAt := *todo.DoneAt
 		todo.DoneAt = &doneAt

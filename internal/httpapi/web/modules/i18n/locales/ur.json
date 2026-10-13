@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "تخمینی پوائنٹس",
   "todo.fields.priority": "ترجیح",
   "todo.priority.none": "کوئی ترجیح نہیں",
+  "todo.fields.dueDate": "آخری تاریخ",
+  "todo.due.cardLabel": "آخری تاریخ {date}",
   "todo.fields.linkedStories": "منسلک اسٹوریز",
   "todo.fields.notes": "نوٹس",
   "todo.fields.sprint": "Sprint",

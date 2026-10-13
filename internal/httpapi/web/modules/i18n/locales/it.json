@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "Punti di stima",
   "todo.fields.priority": "Priorità",
   "todo.priority.none": "Nessuna priorità",
+  "todo.fields.dueDate": "Scadenza",
+  "todo.due.cardLabel": "Scade {date}",
   "todo.fields.linkedStories": "Storie collegate",
   "todo.fields.notes": "Note",
   "todo.fields.sprint": "Sprint",

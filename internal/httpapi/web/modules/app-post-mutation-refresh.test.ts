@@ -24,6 +24,7 @@ vi.mock("../dist/dom/elements.js", () => ({
   todoStatus: document.getElementById("todoStatus"),
   todoEstimationPoints: document.getElementById("todoEstimationPoints"),
   todoPriority: document.getElementById("todoPriority"),
+  todoDueAt: document.getElementById("todoDueAt"),
   get archiveTodoBtn() { return document.getElementById("archiveTodoBtn"); },
   get restoreTodoBtn() { return document.getElementById("restoreTodoBtn"); },
   deleteTodoBtn: document.getElementById("deleteTodoBtn"),
@@ -175,6 +176,7 @@ function installDom(): void {
       <select id="todoStatus"><option value="backlog" selected>Backlog</option></select>
       <select id="todoEstimationPoints"><option value="" selected></option></select>
       <select id="todoPriority"><option value="low" selected>Low</option></select>
+      <input id="todoDueAt" type="datetime-local" value="" />
       <select id="todoAssignee"><option value="99" selected>User 99</option></select>
       <select id="todoSprint"><option value="7" selected>Sprint 7</option></select>
       <div id="todoSprintField"></div>

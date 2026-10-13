@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "Оценка в очках",
   "todo.fields.priority": "Приоритет",
   "todo.priority.none": "Без приоритета",
+  "todo.fields.dueDate": "Срок",
+  "todo.due.cardLabel": "Срок {date}",
   "todo.fields.linkedStories": "Связанные задачи",
   "todo.fields.notes": "Заметки",
   "todo.fields.sprint": "Спринт",

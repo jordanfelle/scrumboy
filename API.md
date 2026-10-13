@@ -556,7 +556,7 @@ Conventions:
 
 | Tool | Input (summary) | Output (summary) |
 |------|-----------------|------------------|
-| `todos_create` | `projectSlug`, `title`, optional `body`, `tags`, `columnKey`, `estimationPoints`, `sprintId`, `assigneeUserId`, `priorityKey`, `position` | `data.todo` |
+| `todos_create` | `projectSlug`, `title`, optional `body`, `tags`, `columnKey`, `estimationPoints`, `sprintId`, `assigneeUserId`, `priorityKey`, `dueAt`, `position` | `data.todo` |
 | `todos_get` | `projectSlug`, `localId` | `data.todo` |
 | `todos_search` | `projectSlug`, `query`, optional `limit`, `excludeLocalIds` | `data.items` (lightweight search hits) |
 | `todos_update` | `projectSlug`, `localId`, `patch` (JSON patch object) | `data.todo` |
@@ -575,6 +575,16 @@ Todo objects include optional `priorityKey`. For `todos_update`, omitting
 and a string assigns that project-local tier. Unknown and cross-project keys
 return `VALIDATION_ERROR`. Priority filtering and priority-based sorting are
 not supported in this release.
+
+Todo objects include `dueAt` (RFC 3339 UTC, or `null`). For `todos_update`,
+omitting `patch.dueAt` preserves it, JSON `null` clears it, and an RFC 3339
+string sets it; values at or before the Unix epoch or from year 2100 on, and
+non-timestamps, return `VALIDATION_ERROR`. The REST board create and PATCH
+(`/api/board/{slug}/todos[/{localId}]`) take the same `dueAt` field with the same
+presence contract; the legacy numeric `/api/todos/{id}` PATCH does not change it.
+The org-wide reminder lead time is `GET`/`PUT`/`DELETE`
+`/api/admin/settings/due-reminder` (admin/owner; body `{"leadHours": 24}`, `0`
+disables, max 2160).
 
 Todo objects also include `createdByUserId`, the immutable historical ID of the
 authenticated user present when the todo was created. It is not proof of

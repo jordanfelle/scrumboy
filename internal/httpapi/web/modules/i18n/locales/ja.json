@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "見積もりポイント",
   "todo.fields.priority": "優先度",
   "todo.priority.none": "優先度なし",
+  "todo.fields.dueDate": "期限",
+  "todo.due.cardLabel": "期限 {date}",
   "todo.fields.linkedStories": "リンクされたストーリー",
   "todo.fields.notes": "メモ",
   "todo.fields.sprint": "スプリント",

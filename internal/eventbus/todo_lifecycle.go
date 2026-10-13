@@ -31,3 +31,23 @@ type TodoLifecyclePayload struct {
 	FromColumnName       string   `json:"fromColumnName,omitempty"`
 	ToColumnName         string   `json:"toColumnName,omitempty"`
 }
+
+// TodoDueSoonEventType is published once per due date when a todo enters its
+// reminder window (see store.ClaimDueReminders).
+const TodoDueSoonEventType = "todo.due_soon"
+
+// TodoDueSoonPayload is the JSON shape for todo.due_soon. Like
+// TodoLifecyclePayload, integrations that link external accounts must key on
+// AssigneeStableUserID (users.public_id), not the reusable integer id.
+type TodoDueSoonPayload struct {
+	ProjectID            int64  `json:"projectId"`
+	ProjectSlug          string `json:"projectSlug,omitempty"`
+	TodoID               int64  `json:"todoId"`
+	LocalID              int64  `json:"localId"`
+	Title                string `json:"title"`
+	ColumnKey            string `json:"columnKey"`
+	AssigneeUserID       *int64 `json:"assigneeUserId,omitempty"`
+	AssigneeStableUserID string `json:"assigneeStableUserId,omitempty"`
+	DueAt                string `json:"dueAt"`     // RFC 3339, UTC
+	LeadHours            int    `json:"leadHours"` // configured reminder lead time
+}

@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "Бали оцінки",
   "todo.fields.priority": "Пріоритет",
   "todo.priority.none": "Без пріоритету",
+  "todo.fields.dueDate": "Термін",
+  "todo.due.cardLabel": "Термін {date}",
   "todo.fields.linkedStories": "Пов'язані story",
   "todo.fields.notes": "Нотатки",
   "todo.fields.sprint": "Sprint",

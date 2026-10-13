@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "نقاط التقدير",
   "todo.fields.priority": "الأولوية",
   "todo.priority.none": "بلا أولوية",
+  "todo.fields.dueDate": "تاريخ الاستحقاق",
+  "todo.due.cardLabel": "الاستحقاق {date}",
   "todo.fields.linkedStories": "القصص المرتبطة",
   "todo.fields.notes": "الملاحظات",
   "todo.fields.sprint": "Sprint",

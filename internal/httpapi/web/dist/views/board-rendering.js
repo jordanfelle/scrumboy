@@ -1,8 +1,17 @@
 import { columnsSpec } from '../features/drag-drop.js';
+import { formatDueBadge, isOverdue } from '../dialogs/todo-due.js';
 import { NO_PRIORITY_FILTER_VALUE } from '../types.js';
 import { escapeHTML, isTemporaryBoard, renderAvatarContent, renderUserAvatar, sanitizeHexColor, } from '../utils.js';
 import { FIELD_TOOLTIPS, titleAttr } from '../field-tooltips.js';
 import { hasI18nKey, t } from '../i18n/index.js';
+export function buildDoneColumnKeys(board) {
+    const keys = new Set();
+    for (const col of board.columnOrder ?? []) {
+        if (col.isDone)
+            keys.add(col.key);
+    }
+    return keys;
+}
 export function buildPriorityTierMap(board) {
     const tiers = board.priorityOrder ?? [];
     const out = {};
@@ -164,7 +173,17 @@ export function renderStoryCardContent(todo, membersByUserId, opts) {
     const priorityHTML = priorityTier
         ? `<span class="card__priority"${priorityStyle}${titleAttr(FIELD_TOOLTIPS.priority)} aria-label="${escapeHTML(t("todo.fields.priority"))}: ${escapeHTML(priorityTier.name)}">${escapeHTML(priorityTier.name)}</span>`
         : "";
-    const footerContent = priorityHTML + pointsHTML + avatarHTML;
+    let dueHTML = "";
+    if (todo.dueAt) {
+        const label = formatDueBadge(todo.dueAt);
+        if (label) {
+            const doneKey = (todo.columnKey || todo.status || "").toLowerCase();
+            const overdue = isOverdue(todo.dueAt, opts?.doneColumnKeys?.has(doneKey) ?? false);
+            const aria = escapeHTML(t("todo.due.cardLabel", { date: label }));
+            dueHTML = `<span class="card__due${overdue ? " card__due--overdue" : ""}" title="${aria}" aria-label="${aria}">${escapeHTML(label)}</span>`;
+        }
+    }
+    const footerContent = dueHTML + priorityHTML + pointsHTML + avatarHTML;
     return `
       <div class="card__content">
         <div class="card__title-row">

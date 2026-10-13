@@ -1,5 +1,6 @@
-import { addTagBtn, archiveTodoBtn, closeTodoBtn, deleteTodoBtn, restoreTodoBtn, shareTodoBtn, todoBody, todoBodyPreview, todoBodyPreviewTab, todoBodyToggle, todoBodyWriteTab, todoDialog, todoDialogTitle, todoEstimationField, todoEstimationPoints, todoPriority, todoStatus, todoTags, todoTitle, } from '../dom/elements.js';
+import { addTagBtn, archiveTodoBtn, closeTodoBtn, deleteTodoBtn, restoreTodoBtn, shareTodoBtn, todoBody, todoBodyPreview, todoBodyPreviewTab, todoBodyToggle, todoBodyWriteTab, todoDialog, todoDialogTitle, todoEstimationField, todoEstimationPoints, todoPriority, todoDueAt, todoStatus, todoTags, todoTitle, } from '../dom/elements.js';
 import { apiFetch } from '../api.js';
+import { isoToLocalInputValue } from './todo-due.js';
 import { DIALOG_CLOSE_REQUEST_EVENT } from '../core/modal-outside-click.js';
 import { renderMarkdownPreviewInto } from '../markdown-preview.js';
 import { THEME_CHANGE_EVENT } from '../theme.js';
@@ -202,6 +203,7 @@ function readTodoDialogSnapshot() {
         assignee: assignee?.value ?? "",
         sprint: sprint?.value ?? "",
         priority: todoPriority?.value ?? "",
+        dueAt: todoDueAt?.value ?? "",
     };
 }
 function captureTodoDialogBaseline() {
@@ -219,6 +221,7 @@ function isTodoDialogDirty() {
         current.assignee !== todoDialogBaseline.assignee ||
         current.sprint !== todoDialogBaseline.sprint ||
         current.priority !== todoDialogBaseline.priority ||
+        current.dueAt !== todoDialogBaseline.dueAt ||
         current.tags.length !== todoDialogBaseline.tags.length ||
         current.tags.some((tag, idx) => tag !== todoDialogBaseline?.tags[idx]));
 }
@@ -541,6 +544,8 @@ export async function openTodoDialog(opts) {
         const selected = populateTodoStatusOptions(initialKey);
         todoStatus.value = selected;
         populateTodoPriorityOptions(null);
+        if (todoDueAt)
+            todoDueAt.value = "";
         deleteTodoBtn.style.display = "none";
         if (archiveTodoBtn)
             archiveTodoBtn.style.display = "none";
@@ -562,6 +567,8 @@ export async function openTodoDialog(opts) {
         const selected = populateTodoStatusOptions(initialKey);
         todoStatus.value = selected;
         populateTodoPriorityOptions(todo.priorityKey);
+        if (todoDueAt)
+            todoDueAt.value = isoToLocalInputValue(todo.dueAt);
         deleteTodoBtn.style.display = permissions.canDeleteTodo ? "" : "none";
         if (archiveTodoBtn)
             archiveTodoBtn.style.display = permissions.canArchiveTodo ? "" : "none";
@@ -595,6 +602,8 @@ export async function openTodoDialog(opts) {
         estimationSelect.disabled = !permissions.canChangeEstimation;
     if (todoPriority)
         todoPriority.disabled = !permissions.canChangeEstimation;
+    if (todoDueAt)
+        todoDueAt.disabled = !permissions.canChangeEstimation;
     const tagInput = document.getElementById("todoTags");
     if (tagInput)
         tagInput.disabled = !permissions.canEditTags;

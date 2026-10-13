@@ -10,6 +10,8 @@ export type TodoBasePayloadInput = {
   assigneeEnabled?: boolean;
   assigneeUserId?: number | null;
   priorityKey?: string | null;
+  /** RFC 3339 to set, null to clear, undefined to leave the due date untouched. */
+  dueAt?: string | null;
 };
 
 export type TodoCreatePayloadInput = TodoBasePayloadInput & {
@@ -44,6 +46,9 @@ function appendOptionalFields(
     payload.assigneeUserId = input.assigneeUserId ?? null;
   }
   payload.priorityKey = input.priorityKey || null;
+  if (input.dueAt !== undefined) {
+    payload.dueAt = input.dueAt;
+  }
   return payload;
 }
 

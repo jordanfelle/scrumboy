@@ -1183,6 +1183,8 @@
   "todo.fields.estimationPoints": "Punkty estymacji",
   "todo.fields.priority": "Priorytet",
   "todo.priority.none": "Brak priorytetu",
+  "todo.fields.dueDate": "Termin",
+  "todo.due.cardLabel": "Termin {date}",
   "todo.fields.linkedStories": "Powiązane story",
   "todo.fields.notes": "Notatki",
   "todo.fields.sprint": "Sprint",
