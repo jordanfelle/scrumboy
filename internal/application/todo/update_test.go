@@ -263,3 +263,25 @@ func assertUpdatePointerValue(t *testing.T, name string, got *int64, want int64)
 		t.Fatalf("%s = %d, want %d", name, *got, want)
 	}
 }
+
+func TestMaterializeUpdateInputBodyAppend(t *testing.T) {
+	existing := store.Todo{Body: "old"}
+	app := Field[string]{Present: true, Value: "more"}
+
+	// The store joins the text inside its transaction; Materialize only carries it.
+	got := MaterializeUpdateInput(existing, UpdatePatch{BodyAppend: app})
+	if got.BodyAppend != "more" || got.BodyReplaces || got.Body != "old" {
+		t.Fatalf("append only: %+v", got)
+	}
+	both := UpdatePatch{Body: Field[string]{Present: true, Value: "new"}, BodyAppend: app}
+	got = MaterializeUpdateInput(existing, both)
+	if got.BodyAppend != "more" || !got.BodyReplaces || got.Body != "new" {
+		t.Fatalf("body then append: %+v", got)
+	}
+	if got := MaterializeUpdateInput(existing, UpdatePatch{}); got.BodyAppend != "" || got.BodyReplaces {
+		t.Fatalf("no append carried: %+v", got)
+	}
+	if !(UpdatePatch{BodyAppend: app}).HasFields() {
+		t.Fatal("BodyAppend must count as a present field")
+	}
+}

@@ -30,6 +30,7 @@ type createTodoInput struct {
 type getTodoInput struct {
 	ProjectSlug string `json:"projectSlug"`
 	LocalID     int64  `json:"localId"`
+	Brief       bool   `json:"brief"`
 }
 
 type searchTodosInput struct {
@@ -43,6 +44,7 @@ type updateTodoEnvelope struct {
 	ProjectSlug string          `json:"projectSlug"`
 	LocalID     int64           `json:"localId"`
 	Patch       json.RawMessage `json:"patch"`
+	Brief       bool            `json:"brief"`
 }
 
 type deleteTodoInput struct {
@@ -56,6 +58,7 @@ type moveTodoInput struct {
 	ToColumnKey   string `json:"toColumnKey"`
 	AfterLocalId  *int64 `json:"afterLocalId"`
 	BeforeLocalId *int64 `json:"beforeLocalId"`
+	Brief         bool   `json:"brief"`
 }
 
 func (a *Adapter) handleTodosCreate(ctx context.Context, input any) (any, map[string]any, *adapterError) {
@@ -185,7 +188,7 @@ func (a *Adapter) handleTodosGet(ctx context.Context, input any) (any, map[strin
 	}
 
 	return map[string]any{
-		"todo": todoToItemForProject(in.ProjectSlug, pc.Project, todo),
+		"todo": todoResult(in.Brief, todoToItemForProject(in.ProjectSlug, pc.Project, todo)),
 	}, map[string]any{}, nil
 }
 
@@ -311,7 +314,7 @@ func (a *Adapter) handleTodosUpdate(ctx context.Context, input any) (any, map[st
 	}
 
 	return map[string]any{
-		"todo": todoToItemForProject(env.ProjectSlug, result.Project, result.Todo),
+		"todo": todoResult(env.Brief, todoToItemForProject(env.ProjectSlug, result.Project, result.Todo)),
 	}, map[string]any{}, nil
 }
 
@@ -418,7 +421,7 @@ func (a *Adapter) handleTodosMove(ctx context.Context, input any) (any, map[stri
 	}
 
 	return map[string]any{
-		"todo": todoToItemForProject(in.ProjectSlug, result.Project, result.Todo),
+		"todo": todoResult(in.Brief, todoToItemForProject(in.ProjectSlug, result.Project, result.Todo)),
 	}, map[string]any{}, nil
 }
 
@@ -471,6 +474,7 @@ func buildUpdatePatch(patchRaw json.RawMessage) (todoapp.UpdatePatch, *adapterEr
 	allowed := map[string]struct{}{
 		"title":            {},
 		"body":             {},
+		"bodyAppend":       {},
 		"tags":             {},
 		"estimationPoints": {},
 		"assigneeUserId":   {},
@@ -505,6 +509,20 @@ func buildUpdatePatch(patchRaw json.RawMessage) (todoapp.UpdatePatch, *adapterEr
 			return todoapp.UpdatePatch{}, newAdapterError(http.StatusBadRequest, CodeValidationError, "invalid body", map[string]any{"field": "body"})
 		}
 		patch.Body = todoapp.Field[string]{Present: true, Value: body}
+	}
+
+	if v, ok := raw["bodyAppend"]; ok {
+		if isNullJSON(v) {
+			return todoapp.UpdatePatch{}, newAdapterError(http.StatusBadRequest, CodeValidationError, "bodyAppend cannot be null", map[string]any{"field": "bodyAppend"})
+		}
+		var appendText string
+		if err := json.Unmarshal(v, &appendText); err != nil {
+			return todoapp.UpdatePatch{}, newAdapterError(http.StatusBadRequest, CodeValidationError, "invalid bodyAppend", map[string]any{"field": "bodyAppend"})
+		}
+		if appendText == "" {
+			return todoapp.UpdatePatch{}, newAdapterError(http.StatusBadRequest, CodeValidationError, "bodyAppend cannot be empty", map[string]any{"field": "bodyAppend"})
+		}
+		patch.BodyAppend = todoapp.Field[string]{Present: true, Value: appendText}
 	}
 
 	if v, ok := raw["tags"]; ok {
@@ -598,4 +616,29 @@ func todoToItemForProject(projectSlug string, project store.Project, todo store.
 		todo.SprintID = nil
 	}
 	return todoToItem(projectSlug, todo)
+}
+
+// todoResult returns the todo projection for a tool result. With brief set the
+// body is dropped, since agents that only need to confirm a move or update
+// otherwise pay for the full (possibly many-KB) body on every call.
+func todoResult(brief bool, item todoItem) any {
+	if !brief {
+		return item
+	}
+	return todoItemBrief{
+		ProjectSlug:      item.ProjectSlug,
+		LocalID:          item.LocalID,
+		Title:            item.Title,
+		ColumnKey:        item.ColumnKey,
+		Tags:             item.Tags,
+		EstimationPoints: item.EstimationPoints,
+		AssigneeUserId:   item.AssigneeUserId,
+		CreatedByUserId:  item.CreatedByUserId,
+		SprintId:         item.SprintId,
+		PriorityKey:      item.PriorityKey,
+		CreatedAt:        item.CreatedAt,
+		UpdatedAt:        item.UpdatedAt,
+		DoneAt:           item.DoneAt,
+		ArchivedAt:       item.ArchivedAt,
+	}
 }
