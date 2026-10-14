@@ -354,6 +354,14 @@ type UpdateTodoInput struct {
 	// each other. The base is Body when BodyReplaces is set, else the stored body.
 	BodyAppend   string
 	BodyReplaces bool
+	// Keep* mark fields the caller omitted: the store takes their value from the
+	// row read inside the update transaction, not from a caller-side snapshot, so
+	// a concurrent edit to an omitted field is never overwritten.
+	KeepTitle            bool
+	KeepBody             bool
+	KeepTags             bool
+	KeepEstimationPoints bool
+	KeepAssigneeUserID   bool
 }
 
 // resolveDoneAtForColumnTransition returns the value to write for done_at.
@@ -451,6 +459,21 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 	existing, err := getTodoTx(ctx, tx, todoID)
 	if err != nil {
 		return Todo{}, err
+	}
+	if in.KeepTitle {
+		in.Title = existing.Title
+	}
+	if in.KeepBody {
+		in.Body = existing.Body
+	}
+	if in.KeepTags {
+		in.Tags = append([]string(nil), existing.Tags...)
+	}
+	if in.KeepEstimationPoints {
+		in.EstimationPoints = cloneInt64Ptr(existing.EstimationPoints)
+	}
+	if in.KeepAssigneeUserID {
+		in.AssigneeUserID = cloneInt64Ptr(existing.AssigneeUserID)
 	}
 	if in.BodyAppend != "" {
 		base := existing.Body

@@ -129,6 +129,12 @@ func MaterializeUpdateInput(existing store.Todo, patch UpdatePatch) store.Update
 		PriorityKeyPresent: patch.PriorityKey.Present,
 		BodyAppend:         patch.BodyAppend.Value,
 		BodyReplaces:       patch.Body.Present,
+
+		KeepTitle:            !patch.Title.Present,
+		KeepBody:             !patch.Body.Present,
+		KeepTags:             !patch.Tags.Present,
+		KeepEstimationPoints: !patch.EstimationPoints.Present,
+		KeepAssigneeUserID:   !patch.AssigneeUserID.Present,
 	}
 }
 
