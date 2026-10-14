@@ -517,3 +517,97 @@ func TestDueAt_ExportJSONRoundTripsStrictly(t *testing.T) {
 		t.Fatalf("round trip lost dueAt: %+v", todos)
 	}
 }
+
+func TestDueAt_MergeImportAssigneeChangeRearmsReminder(t *testing.T) {
+	st, cleanup := newTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	owner, err := st.BootstrapUser(ctx, "owner@example.com", "pass1234A!", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx = WithUserID(ctx, owner.ID)
+	p, err := st.CreateProject(ctx, "due")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	due := now.Add(10 * time.Hour)
+	todo := dueAtTestTodoCtx(t, ctx, st, p.ID, "t", DefaultColumnBacklog, &due)
+	// The reminder fires while nobody is assigned.
+	if got, _ := st.ClaimDueReminders(ctx, now, 10); len(got) != 1 {
+		t.Fatalf("first claim = %d, want 1", len(got))
+	}
+	data, err := st.ExportAllProjects(ctx, ModeFull)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	// Same dueAt, new assignee: the new assignee has not been told, so re-arm.
+	for i := range data.Projects {
+		for j := range data.Projects[i].Todos {
+			data.Projects[i].Todos[j].AssigneeUserId = &owner.ID
+		}
+	}
+	if _, err := st.ImportProjects(ctx, data, ModeFull, "merge"); err != nil {
+		t.Fatalf("merge import: %v", err)
+	}
+	if dueAtPendingMarked(t, st, todo.ID) {
+		t.Fatal("merge import changing the assignee with the same dueAt did not re-arm the reminder")
+	}
+	if got, _ := st.ClaimDueReminders(ctx, now.Add(time.Minute), 10); len(got) != 1 {
+		t.Fatalf("claim after assignee change = %d, want 1", len(got))
+	}
+
+	// Same assignee and same dueAt again: no re-arm, no resend.
+	if _, err := st.ImportProjects(ctx, data, ModeFull, "merge"); err != nil {
+		t.Fatalf("merge import (unchanged): %v", err)
+	}
+	if !dueAtPendingMarked(t, st, todo.ID) {
+		t.Fatal("merge import with unchanged assignee and dueAt cleared the reminder marker")
+	}
+	if got, _ := st.ClaimDueReminders(ctx, now.Add(2*time.Minute), 10); len(got) != 0 {
+		t.Fatalf("unchanged merge import caused %d duplicate reminders", len(got))
+	}
+
+}
+
+func TestDueAt_ListArchivedTodosKeepsDueAt(t *testing.T) {
+	st, cleanup := newTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	owner, err := st.BootstrapUser(ctx, "owner@example.com", "pass1234A!", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx = WithUserID(ctx, owner.ID)
+	p, err := st.CreateProject(ctx, "due")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	due := time.Now().UTC().Add(48 * time.Hour).Truncate(time.Millisecond)
+	withDue := dueAtTestTodoCtx(t, ctx, st, p.ID, "with", DefaultColumnBacklog, &due)
+	noDue := dueAtTestTodoCtx(t, ctx, st, p.ID, "without", DefaultColumnBacklog, nil)
+	if _, err := st.ArchiveTodosByLocalID(ctx, p.ID, []int64{withDue.LocalID, noDue.LocalID}, ModeFull); err != nil {
+		t.Fatalf("archive: %v", err)
+	}
+	items, _, _, err := st.ListArchivedTodos(ctx, p.ID, 50, nil, nil, ModeFull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("archived = %d, want 2", len(items))
+	}
+	for _, it := range items {
+		switch it.ID {
+		case withDue.ID:
+			if it.DueAt == nil || !it.DueAt.Equal(due) {
+				t.Errorf("archived DueAt = %v, want %v", it.DueAt, due)
+			}
+		case noDue.ID:
+			if it.DueAt != nil {
+				t.Errorf("archived DueAt = %v, want nil", it.DueAt)
+			}
+		}
+	}
+}

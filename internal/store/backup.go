@@ -2141,10 +2141,10 @@ func (s *Store) importMergeUpdate(ctx context.Context, data *ExportData, mode Mo
 			}
 
 			// Check if todo exists
-			var existingTodoID sql.NullInt64
+			var existingTodoID, existingAssignee, existingDueAt, existingRemindedAt sql.NullInt64
 			err := tx.QueryRowContext(ctx, `
-				SELECT id FROM todos WHERE project_id = ? AND local_id = ?`,
-				projectID, tExport.LocalID).Scan(&existingTodoID)
+				SELECT id, assignee_user_id, due_at, due_reminded_at FROM todos WHERE project_id = ? AND local_id = ?`,
+				projectID, tExport.LocalID).Scan(&existingTodoID, &existingAssignee, &existingDueAt, &existingRemindedAt)
 
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return nil, fmt.Errorf("check todo: %w", err)
@@ -2181,13 +2181,22 @@ func (s *Store) importMergeUpdate(ctx context.Context, data *ExportData, mode Mo
 					setClauses = append(setClauses, "priority_key = ?")
 					updateArgs = append(updateArgs, priorityForSQL)
 				}
+				// The sent reminder went to the previous assignee (or nobody), so a changed
+				// assignee re-arms it, matching the normal update path. Unchanged keeps it.
+				assigneeChanged := assigneeVal != nil && (!existingAssignee.Valid || existingAssignee.Int64 != *assigneeVal)
 				if tExport.DueAt != nil {
 					// An absent dueAt preserves the existing deadline. A changed one replaces it
 					// and starts a new reminder cycle.
-					// The marker is kept when the value is unchanged, so re-importing a backup of
+					// The marker is kept when neither value changes, so re-importing a backup of
 					// this same server does not re-send reminders. Set clauses read the old row.
-					setClauses = append(setClauses, "due_reminded_at = CASE WHEN due_at IS ? THEN due_reminded_at ELSE NULL END", "due_at = ?")
+					keep := "due_reminded_at"
+					if assigneeChanged {
+						keep = "NULL"
+					}
+					setClauses = append(setClauses, "due_reminded_at = CASE WHEN due_at IS ? THEN "+keep+" ELSE NULL END", "due_at = ?")
 					updateArgs = append(updateArgs, *tExport.DueAt, *tExport.DueAt)
+				} else if assigneeChanged && existingDueAt.Valid && existingRemindedAt.Valid {
+					setClauses = append(setClauses, "due_reminded_at = NULL")
 				}
 				if tExport.ArchivedAtPresent {
 					setClauses = append(setClauses, "archived_at = ?")
