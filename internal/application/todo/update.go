@@ -18,8 +18,13 @@ type Field[T any] struct {
 // update fields. It carries syntactic presence without applying transport
 // decoding, validation, or semantic no-op policy.
 type UpdatePatch struct {
-	Title            Field[string]
-	Body             Field[string]
+	Title Field[string]
+	Body  Field[string]
+	// BodyAppend is appended to the resulting body (after Body when both are
+	// present) separated by a blank line, so agents can record a link or note
+	// without resending the whole body. The store applies it inside the update
+	// transaction, so it is atomic with respect to concurrent writers.
+	BodyAppend       Field[string]
 	Tags             Field[[]string]
 	EstimationPoints Field[*int64]
 	AssigneeUserID   Field[*int64]
@@ -33,6 +38,7 @@ type UpdatePatch struct {
 func (p UpdatePatch) HasFields() bool {
 	return p.Title.Present ||
 		p.Body.Present ||
+		p.BodyAppend.Present ||
 		p.Tags.Present ||
 		p.EstimationPoints.Present ||
 		p.AssigneeUserID.Present ||
@@ -110,6 +116,10 @@ func MaterializeUpdateInput(existing store.Todo, patch UpdatePatch) store.Update
 			sprintID = cloneUpdateInt64Ptr(patch.SprintID.Value)
 		}
 	}
+	bodyAppend := ""
+	if patch.BodyAppend.Present {
+		bodyAppend = patch.BodyAppend.Value
+	}
 
 	return store.UpdateTodoInput{
 		Title:              title,
@@ -121,6 +131,14 @@ func MaterializeUpdateInput(existing store.Todo, patch UpdatePatch) store.Update
 		ClearSprint:        clearSprint,
 		PriorityKey:        priorityKey,
 		PriorityKeyPresent: patch.PriorityKey.Present,
+		BodyAppend:         bodyAppend,
+		BodyReplaces:       patch.Body.Present,
+
+		KeepTitle:            !patch.Title.Present,
+		KeepBody:             !patch.Body.Present,
+		KeepTags:             !patch.Tags.Present,
+		KeepEstimationPoints: !patch.EstimationPoints.Present,
+		KeepAssigneeUserID:   !patch.AssigneeUserID.Present,
 	}
 }
 

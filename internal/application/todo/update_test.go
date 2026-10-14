@@ -263,3 +263,67 @@ func assertUpdatePointerValue(t *testing.T, name string, got *int64, want int64)
 		t.Fatalf("%s = %d, want %d", name, *got, want)
 	}
 }
+
+func TestMaterializeUpdateInputBodyAppend(t *testing.T) {
+	existing := fullyPopulatedUpdateTodo()
+	app := Field[string]{Present: true, Value: "more"}
+
+	// The store joins the text inside its transaction; Materialize only carries it.
+	got := MaterializeUpdateInput(existing, UpdatePatch{BodyAppend: app})
+	if got.BodyAppend != "more" || got.BodyReplaces || got.Body != existing.Body {
+		t.Fatalf("append only: %+v", got)
+	}
+	if !got.KeepTitle || !got.KeepBody || !got.KeepTags || !got.KeepEstimationPoints || !got.KeepAssigneeUserID {
+		t.Fatalf("append-only preservation flags: %+v", got)
+	}
+	if got.SprintID != nil || got.ClearSprint {
+		t.Fatalf("append-only sprint omission requested mutation: %+v", got)
+	}
+	if got.PriorityKeyPresent || got.PriorityKey == nil || *got.PriorityKey != *existing.PriorityKey {
+		t.Fatalf("append-only priority omission lost presence semantics: %+v", got)
+	}
+
+	estimation := int64(8)
+	assignee := int64(52)
+	sprint := int64(11)
+	priority := "urgent"
+	both := UpdatePatch{
+		Title:            Field[string]{Present: true, Value: "new title"},
+		Body:             Field[string]{Present: true, Value: "new body"},
+		BodyAppend:       app,
+		Tags:             Field[[]string]{Present: true, Value: []string{"new-tag"}},
+		EstimationPoints: Field[*int64]{Present: true, Value: &estimation},
+		AssigneeUserID:   Field[*int64]{Present: true, Value: &assignee},
+		SprintID:         Field[*int64]{Present: true, Value: &sprint},
+		PriorityKey:      Field[*string]{Present: true, Value: &priority},
+	}
+	got = MaterializeUpdateInput(existing, both)
+	if got.BodyAppend != "more" || !got.BodyReplaces || got.Body != "new body" {
+		t.Fatalf("body then append: %+v", got)
+	}
+	if got.KeepTitle || got.KeepBody || got.KeepTags || got.KeepEstimationPoints || got.KeepAssigneeUserID {
+		t.Fatalf("explicit replacements received preservation flags: %+v", got)
+	}
+	if got.Title != "new title" || !reflect.DeepEqual(got.Tags, []string{"new-tag"}) {
+		t.Fatalf("explicit replacements were not retained: %+v", got)
+	}
+	assertUpdatePointerValue(t, "explicit estimation", got.EstimationPoints, estimation)
+	assertUpdatePointerValue(t, "explicit assignee", got.AssigneeUserID, assignee)
+	assertUpdatePointerValue(t, "explicit sprint", got.SprintID, sprint)
+	if got.ClearSprint || !got.PriorityKeyPresent || got.PriorityKey == nil || *got.PriorityKey != priority {
+		t.Fatalf("explicit sprint/priority presence semantics: %+v", got)
+	}
+	if got := MaterializeUpdateInput(existing, UpdatePatch{}); got.BodyAppend != "" || got.BodyReplaces {
+		t.Fatalf("no append carried: %+v", got)
+	}
+	ignored := MaterializeUpdateInput(existing, UpdatePatch{
+		Title:      Field[string]{Present: true, Value: "new title"},
+		BodyAppend: Field[string]{Value: "must not append"},
+	})
+	if ignored.BodyAppend != "" {
+		t.Fatalf("omitted append value was carried: %+v", ignored)
+	}
+	if !(UpdatePatch{BodyAppend: app}).HasFields() {
+		t.Fatal("BodyAppend must count as a present field")
+	}
+}

@@ -112,6 +112,7 @@ func toolCatalogDefinitions() map[string]mcpToolDef {
 			InputSchema: jsonSchema("object", map[string]any{
 				"projectSlug": jsonProp("string", "Project identifier (slug)"),
 				"localId":     jsonProp("integer", "Project-scoped todo ID"),
+				"brief":       jsonProp("boolean", "Omit the body from the returned todo to save tokens"),
 			}, []string{"projectSlug", "localId"}),
 		},
 		"todos_search": {
@@ -130,9 +131,11 @@ func toolCatalogDefinitions() map[string]mcpToolDef {
 			InputSchema: jsonSchema("object", map[string]any{
 				"projectSlug": jsonProp("string", "Project identifier (slug)"),
 				"localId":     jsonProp("integer", "Project-scoped todo ID"),
+				"brief":       jsonProp("boolean", "Omit the body from the returned todo to save tokens"),
 				"patch": jsonObjectProp("Fields to update. Only included fields are changed.", map[string]any{
 					"title":            jsonProp("string", "New title"),
 					"body":             jsonProp("string", "New body or description"),
+					"bodyAppend":       jsonProp("string", "Text appended to the body after a blank line (applied after body when both are given)"),
 					"tags":             jsonArrayProp("string", "Replace tags with this list"),
 					"estimationPoints": jsonPropWithNull("integer", "Story points estimate"),
 					"assigneeUserId":   jsonPropWithNull("integer", "Assignee user ID"),
@@ -183,6 +186,7 @@ func toolCatalogDefinitions() map[string]mcpToolDef {
 				"toColumnKey":   jsonProp("string", "Target workflow column key"),
 				"afterLocalId":  jsonPropWithNull("integer", "Place after this todo local ID"),
 				"beforeLocalId": jsonPropWithNull("integer", "Place before this todo local ID"),
+				"brief":         jsonProp("boolean", "Omit the body from the returned todo to save tokens"),
 			}, []string{"projectSlug", "localId", "toColumnKey"}),
 		},
 		"todos_linksList": {

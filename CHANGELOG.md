@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [3.38.5] - 2026-10-14
+
+### Added
+
+- **MCP todo response controls** - `todos_update` accepts `bodyAppend`, and
+  `todos_get`, `todos_update`, and `todos_move` accept `brief` to omit the body
+  from their todo response.
+
+### Fixed
+
+- **Concurrent MCP todo updates** - Omitted replacement fields are resolved
+  from the latest todo row inside the serialized update transaction, preserving
+  concurrent changes during append-only updates.
+
 ## [3.38.4] - 2026-10-10
 
 ### Added

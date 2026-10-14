@@ -85,6 +85,24 @@ type todoItem struct {
 	ArchivedAt       *time.Time `json:"archivedAt"`
 }
 
+// todoItemBrief is todoItem without the body (see todoResult).
+type todoItemBrief struct {
+	ProjectSlug      string     `json:"projectSlug"`
+	LocalID          int64      `json:"localId"`
+	Title            string     `json:"title"`
+	ColumnKey        string     `json:"columnKey"`
+	Tags             []string   `json:"tags"`
+	EstimationPoints *int64     `json:"estimationPoints"`
+	AssigneeUserId   *int64     `json:"assigneeUserId"`
+	CreatedByUserId  *int64     `json:"createdByUserId"`
+	SprintId         *int64     `json:"sprintId"`
+	PriorityKey      *string    `json:"priorityKey"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
+	DoneAt           *time.Time `json:"doneAt"`
+	ArchivedAt       *time.Time `json:"archivedAt"`
+}
+
 type todoSearchItem struct {
 	ProjectSlug string `json:"projectSlug"`
 	LocalID     int64  `json:"localId"`

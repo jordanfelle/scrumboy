@@ -349,6 +349,19 @@ type UpdateTodoInput struct {
 	ClearSprint        bool    // when true, set sprint_id to NULL (backlog); overrides SprintID
 	PriorityKey        *string // nil means clear when PriorityKeyPresent is true
 	PriorityKeyPresent bool    // false preserves the existing priority assignment
+	// BodyAppend, when non-empty, is appended (after a blank line) to the body as
+	// read inside the update transaction, so concurrent appends do not overwrite
+	// each other. The base is Body when BodyReplaces is set, else the stored body.
+	BodyAppend   string
+	BodyReplaces bool
+	// Keep* mark fields the caller omitted: the store takes their value from the
+	// row read inside the update transaction, not from a caller-side snapshot, so
+	// a concurrent edit to an omitted field is never overwritten.
+	KeepTitle            bool
+	KeepBody             bool
+	KeepTags             bool
+	KeepEstimationPoints bool
+	KeepAssigneeUserID   bool
 }
 
 // resolveDoneAtForColumnTransition returns the value to write for done_at.
@@ -446,6 +459,32 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 	existing, err := getTodoTx(ctx, tx, todoID)
 	if err != nil {
 		return Todo{}, err
+	}
+	if in.KeepTitle {
+		in.Title = existing.Title
+	}
+	if in.KeepBody {
+		in.Body = existing.Body
+	}
+	if in.KeepTags {
+		in.Tags = append([]string(nil), existing.Tags...)
+	}
+	if in.KeepEstimationPoints {
+		in.EstimationPoints = cloneInt64Ptr(existing.EstimationPoints)
+	}
+	if in.KeepAssigneeUserID {
+		in.AssigneeUserID = cloneInt64Ptr(existing.AssigneeUserID)
+	}
+	if in.BodyAppend != "" {
+		base := existing.Body
+		if in.BodyReplaces {
+			base = in.Body
+		}
+		in.Body = base
+		if base != "" {
+			in.Body += "\n\n"
+		}
+		in.Body += in.BodyAppend
 	}
 	originalTags := append([]string(nil), existing.Tags...)
 	p, err := s.getProjectForWriteTx(ctx, tx, existing.ProjectID, mode)
