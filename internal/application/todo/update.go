@@ -116,6 +116,10 @@ func MaterializeUpdateInput(existing store.Todo, patch UpdatePatch) store.Update
 			sprintID = cloneUpdateInt64Ptr(patch.SprintID.Value)
 		}
 	}
+	bodyAppend := ""
+	if patch.BodyAppend.Present {
+		bodyAppend = patch.BodyAppend.Value
+	}
 
 	return store.UpdateTodoInput{
 		Title:              title,
@@ -127,7 +131,7 @@ func MaterializeUpdateInput(existing store.Todo, patch UpdatePatch) store.Update
 		ClearSprint:        clearSprint,
 		PriorityKey:        priorityKey,
 		PriorityKeyPresent: patch.PriorityKey.Present,
-		BodyAppend:         patch.BodyAppend.Value,
+		BodyAppend:         bodyAppend,
 		BodyReplaces:       patch.Body.Present,
 
 		KeepTitle:            !patch.Title.Present,
