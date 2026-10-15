@@ -23,6 +23,24 @@
   Includes migration `077_add_todo_due_at.sql`. See `docs/notifications.md`
   and `docs/webhooks.md`.
 
+- **Due-soon sorting** - Added **Due soon** to the existing Search todos →
+  Sort menu. Todos are sorted within each workflow column by ascending due
+  date, placing overdue items first, upcoming deadlines next, and undated
+  items last. Sorting uses stable ID tie-breaking and supports paginated
+  loading, existing board filters, and persisted sort preferences. Manual
+  same-column reordering is disabled while this sort is active, but
+  cross-column dragging remains available. REST board queries and MCP
+  `board_get` also support `sort=due`.
+
+- **Overdue indicators** - Overdue board cards display a small red **!**
+  immediately left of the drag handle. Hovering over the indicator on desktop
+  shows the complete due date (e.g. `Fri, Mar 13th 2026`), with an accessible
+  description for assistive technologies. Opening an overdue todo displays
+  **Overdue** in red, centered in the dialog header between the title and
+  updated timestamp. Indicators are suppressed for completed and archived
+  todos, respect custom workflow columns marked as done, and update when
+  the due date or workflow status changes.
+
 ### Fixed
 
 - **Due-soon email authorization** - The reminder email re-resolves the todo,
