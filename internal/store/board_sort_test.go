@@ -18,6 +18,8 @@ func TestParseSortOrder(t *testing.T) {
 		{name: "newest", raw: "newest", want: SortOrderNewest},
 		{name: "newest trims whitespace", raw: " newest ", want: SortOrderNewest},
 		{name: "oldest", raw: "oldest", want: SortOrderOldest},
+		{name: "due", raw: "due", want: SortOrderDue},
+		{name: "due trims whitespace", raw: " due ", want: SortOrderDue},
 		{name: "uppercase newest rejected", raw: "Newest", wantErr: true},
 		{name: "unknown value rejected", raw: "manual", wantErr: true},
 	}
@@ -57,6 +59,17 @@ VALUES (?, ?, ?, '', ?, ?, NULL, NULL, NULL, ?, ?, NULL)`,
 	}
 }
 
+func setSortTestTodoDueAt(t *testing.T, st *Store, projectID int64, title string, dueAtMs *int64) {
+	t.Helper()
+	var value any
+	if dueAtMs != nil {
+		value = *dueAtMs
+	}
+	if _, err := st.db.Exec(`UPDATE todos SET due_at = ? WHERE project_id = ? AND title = ?`, value, projectID, title); err != nil {
+		t.Fatalf("set due date for %q: %v", title, err)
+	}
+}
+
 func TestGetBoard_SortOrder(t *testing.T) {
 	st, cleanup := newTestStore(t)
 	defer cleanup()
@@ -80,6 +93,9 @@ func TestGetBoard_SortOrder(t *testing.T) {
 	insertSortTestTodo(t, st, p.ID, 1, "A", 10, base+2000) // rank 1st, created 2nd
 	insertSortTestTodo(t, st, p.ID, 2, "B", 20, base+3000) // rank 2nd, created 3rd (newest)
 	insertSortTestTodo(t, st, p.ID, 3, "C", 30, base+1000) // rank 3rd, created 1st (oldest)
+	dueEarly, dueLate := base-1000, base+10_000
+	setSortTestTodoDueAt(t, st, p.ID, "C", &dueEarly)
+	setSortTestTodoDueAt(t, st, p.ID, "A", &dueLate)
 
 	pc, err := st.GetProjectContextForRead(ctxOwner, p.ID, ModeFull)
 	if err != nil {
@@ -136,6 +152,34 @@ func TestGetBoard_SortOrder(t *testing.T) {
 		}
 		assertOrder(t, titlesOf(cols[DefaultColumnBacklog]), []string{"B", "A", "C"})
 	})
+
+	t.Run("due soon orders dated todos chronologically and undated last", func(t *testing.T) {
+		_, _, _, cols, err := st.GetBoard(ctxOwner, &pc, []string{""}, "", AssigneeFilter{}, PriorityFilter{}, SprintFilter{Mode: "none"}, SortOrderDue)
+		if err != nil {
+			t.Fatalf("GetBoard: %v", err)
+		}
+		assertOrder(t, titlesOf(cols[DefaultColumnBacklog]), []string{"C", "A", "B"})
+	})
+
+	t.Run("due soon paged fast path and per-lane fallback agree", func(t *testing.T) {
+		project, tags, workflow, fastCols, fastMeta, err := st.GetBoardPaged(ctxOwner, &pc, []string{""}, "", AssigneeFilter{}, PriorityFilter{}, SprintFilter{Mode: "none"}, SortOrderDue, 2)
+		if err != nil {
+			t.Fatalf("GetBoardPaged: %v", err)
+		}
+		resolved, err := st.resolveBoardTagFilter(ctxOwner, p.ID, true, []string{""})
+		if err != nil {
+			t.Fatalf("resolveBoardTagFilter: %v", err)
+		}
+		_, _, _, fallbackCols, fallbackMeta, err := st.getBoardPagedPerLane(ctxOwner, &pc, project.ID, workflow, resolved, "", AssigneeFilter{}, PriorityFilter{}, SprintFilter{Mode: "none"}, SortOrderDue, 2, tags)
+		if err != nil {
+			t.Fatalf("getBoardPagedPerLane: %v", err)
+		}
+		assertOrder(t, titlesOf(fastCols[DefaultColumnBacklog]), []string{"C", "A"})
+		assertOrder(t, titlesOf(fallbackCols[DefaultColumnBacklog]), []string{"C", "A"})
+		if fastMeta[DefaultColumnBacklog] != fallbackMeta[DefaultColumnBacklog] {
+			t.Fatalf("fast meta = %+v, fallback meta = %+v", fastMeta[DefaultColumnBacklog], fallbackMeta[DefaultColumnBacklog])
+		}
+	})
 }
 
 func TestListTodosForBoardLane_SortOrderPagination(t *testing.T) {
@@ -160,6 +204,13 @@ func TestListTodosForBoardLane_SortOrderPagination(t *testing.T) {
 	// to assert regardless of direction.
 	for i := int64(1); i <= 5; i++ {
 		insertSortTestTodo(t, st, p.ID, i, titleFor(i), i*10, base+i*1000)
+	}
+	dueFirst, dueTie := base-1000, base+10_000
+	setSortTestTodoDueAt(t, st, p.ID, "T5", &dueFirst)
+	setSortTestTodoDueAt(t, st, p.ID, "T1", &dueTie)
+	setSortTestTodoDueAt(t, st, p.ID, "T2", &dueTie)
+	if _, err := st.db.Exec(`UPDATE todos SET assignee_user_id = ? WHERE project_id = ? AND title IN ('T1', 'T5')`, owner.ID, p.ID); err != nil {
+		t.Fatalf("assign filtered sort test todos: %v", err)
 	}
 
 	drainAll := func(t *testing.T, sortOrder SortOrder, pageSize int) []string {
@@ -225,6 +276,38 @@ func TestListTodosForBoardLane_SortOrderPagination(t *testing.T) {
 		if len(got) != len(want) {
 			t.Fatalf("got %v, want %v", got, want)
 		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("got %v, want %v", got, want)
+			}
+		}
+	})
+
+	t.Run("due soon paginates ties and multiple undated todos without dup or gap", func(t *testing.T) {
+		got := drainAll(t, SortOrderDue, 2)
+		want := []string{"T5", "T1", "T2", "T3", "T4"}
+		if len(got) != len(want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("got %v, want %v", got, want)
+			}
+		}
+	})
+
+	t.Run("due soon combines with an assignee filter", func(t *testing.T) {
+		pc, err := st.GetProjectContextForRead(ctxOwner, p.ID, ModeFull)
+		if err != nil {
+			t.Fatalf("GetProjectContextForRead: %v", err)
+		}
+		filter := AssigneeFilter{mode: assigneeFilterUser, userID: owner.ID}
+		_, _, _, cols, err := st.GetBoard(ctxOwner, &pc, []string{""}, "", filter, PriorityFilter{}, SprintFilter{Mode: "none"}, SortOrderDue)
+		if err != nil {
+			t.Fatalf("GetBoard: %v", err)
+		}
+		got := []string{cols[DefaultColumnBacklog][0].Title, cols[DefaultColumnBacklog][1].Title}
+		want := []string{"T5", "T1"}
 		for i := range want {
 			if got[i] != want[i] {
 				t.Fatalf("got %v, want %v", got, want)

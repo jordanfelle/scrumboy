@@ -16,7 +16,7 @@ let boardColumns = columnsSpec();
 let mobileTabIntroGlowTimer = null;
 function isChronologicalSortActive() {
     const sort = getSortFromUrl();
-    return sort === "newest" || sort === "oldest";
+    return sort === "newest" || sort === "oldest" || sort === "due";
 }
 /**
  * Fallback column list when the board API omits `columnOrder` (should be rare).

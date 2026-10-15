@@ -21,7 +21,7 @@ import { registerBoardRefresher, registerSprintsRefresher, getBoardLimitPerLaneF
 import { boardSprintsEnabled, normalizeSprints } from '../sprints.js';
 import { on, off } from '../events.js';
 import { recordLocalMutation, } from '../realtime/guard.js';
-import { buildBoardColumnsHtml, buildFiltersHtml, buildNoResultsHtml, buildOmniFilterRowHtml, buildTopbarHtml, buildPriorityTierMap, getBoardColumns, visibleBoardLaneCount, renderVoiceCommandTriggerHtml, renderTodoCard, } from './board-rendering.js';
+import { buildBoardColumnsHtml, buildFiltersHtml, buildNoResultsHtml, buildOmniFilterRowHtml, buildTopbarHtml, buildPriorityTierMap, buildDoneColumnKeys, getBoardColumns, visibleBoardLaneCount, renderVoiceCommandTriggerHtml, renderTodoCard, } from './board-rendering.js';
 import { AGENDA_COLUMN_KEY, agendaEvents, agendaLaneColor, agendaLaneTitle, agendaMobileTabAriaLabel, agendaMobileTabInnerHtml, applyAgendaScrollAfterRender, buildAgendaColumnHtml, captureAgendaListScroll, flushAgendaInitialScroll, isAgendaEnabled } from './board-agenda.js';
 import { clearTodoMultiSelection, ensureBulkEditUi, getSelectedTodoIds, toggleTodoSelection, } from './board-selection.js';
 import { bootstrapLoadedBoardView } from './board-load-bootstrap.js';
@@ -513,6 +513,7 @@ export async function handleLoadMore(status) {
                 showPointsMode,
                 selectedIds: getSelectedTodoIds(),
                 priorityTiers: board ? buildPriorityTierMap(board) : undefined,
+                doneColumnKeys: board ? buildDoneColumnKeys(board) : undefined,
             };
             items.forEach((t) => {
                 const card = document.createElement("div");
@@ -858,6 +859,7 @@ function updateBoardContent(board, tags, search, sprintId, assignee, sort, prior
             showPointsMode,
             selectedIds: getSelectedTodoIds(),
             priorityTiers: buildPriorityTierMap(board),
+            doneColumnKeys: buildDoneColumnKeys(board),
         };
         const savedAgendaScroll = captureAgendaListScroll();
         boardEl.innerHTML =
@@ -1006,6 +1008,7 @@ function renderBoardFromData(board, projectId, tags, search, sprintId, assignee,
         showPointsMode,
         selectedIds: getSelectedTodoIds(),
         priorityTiers: buildPriorityTierMap(board),
+        doneColumnKeys: buildDoneColumnKeys(board),
     };
     app.innerHTML = `
     <div class="page">

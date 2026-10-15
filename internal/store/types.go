@@ -168,13 +168,15 @@ type PriorityFilter struct {
 //
 // The zero value (SortOrderDefault) preserves today's manual drag-rank order
 // ("t.rank ASC, t.id ASC"). SortOrderNewest/SortOrderOldest order by
-// created_at instead; ties break on id to keep pagination stable.
+// created_at; SortOrderDue orders dated todos chronologically and undated todos
+// last. Ties break on id to keep pagination stable.
 type SortOrder string
 
 const (
 	SortOrderDefault SortOrder = ""
 	SortOrderNewest  SortOrder = "newest"
 	SortOrderOldest  SortOrder = "oldest"
+	SortOrderDue     SortOrder = "due"
 )
 
 // ProjectContext bundles project, role, and auth state computed once per request.
@@ -322,6 +324,10 @@ type Todo struct {
 	UpdatedAt       time.Time
 	DoneAt          *time.Time // Last completion time (Unix ms). Set on transition into DONE; never cleared on reopen.
 	ArchivedAt      *time.Time // Orthogonal archival timestamp; NULL means active.
+	DueAt           *time.Time // Optional deadline; NULL means no due date.
+	// DueRemindedAt records when the "due soon" reminder fired for the current DueAt.
+	// It is reset whenever DueAt changes. Internal bookkeeping, never projected to clients.
+	DueRemindedAt *time.Time `json:"-"`
 
 	// AssignmentChanged is set when this mutation changed assignee handling: CreateTodo (initial assignee on create)
 	// or UpdateTodo (assignee field changed). Not persisted; used by callers to gate SSE emissions.
@@ -329,6 +335,10 @@ type Todo struct {
 	// MaterialChanged is transaction-authoritative mutation metadata. It ignores
 	// bookkeeping timestamps and is not persisted or projected to clients.
 	MaterialChanged bool `json:"-"`
+	// PublicProjectionChanged is transaction-authoritative mutation metadata for
+	// deciding whether public-board consumers need an invalidation. Private-only
+	// fields such as assignee and due date do not set it.
+	PublicProjectionChanged bool `json:"-"`
 	// MoveFromColumnName and MoveToColumnName are transient mutation metadata.
 	// MoveTodo populates them from the workflow columns it already validates in
 	// the authoritative transaction; they are never persisted or projected.

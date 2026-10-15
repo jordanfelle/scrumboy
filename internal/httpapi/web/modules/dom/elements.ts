@@ -16,6 +16,7 @@ const todoStatus = document.getElementById("todoStatus");
 const todoEstimationField = document.getElementById("todoEstimationField");
 const todoEstimationPoints = document.getElementById("todoEstimationPoints");
 const todoPriority = document.getElementById("todoPriority");
+const todoDueAt = document.getElementById("todoDueAt");
 const deleteTodoBtn = document.getElementById("deleteTodoBtn");
 const archiveTodoBtn = document.getElementById("archiveTodoBtn");
 const restoreTodoBtn = document.getElementById("restoreTodoBtn");
@@ -53,6 +54,7 @@ export {
   todoEstimationField,
   todoEstimationPoints,
   todoPriority,
+  todoDueAt,
   deleteTodoBtn,
   archiveTodoBtn,
   restoreTodoBtn,

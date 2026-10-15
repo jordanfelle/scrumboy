@@ -147,6 +147,7 @@ const BOOTSTRAP_EN_CATALOG = {
     "board.filters.next": "Next tags",
     "board.filters.noPriority": "No priority",
     "board.filters.oldestFirst": "Oldest first",
+    "board.filters.dueSoon": "Due soon",
     "board.filters.openFilters": "Filters",
     "board.filters.previous": "Previous tags",
     "board.filters.priority": "Priority",

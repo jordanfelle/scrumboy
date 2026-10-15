@@ -82,6 +82,11 @@ type Options struct {
 	VAPIDSubscriber string // VAPID JWT "sub" (e.g. mailto:ops@example.com); defaults during configuration preparation
 	PushDebug       bool   // Log push send/skip (also SCRUMBOY_DEBUG_PUSH in config)
 
+	// DueReminderInterval is how often the due-date reminder scheduler runs.
+	// Zero selects the default (one minute). The scheduler does not run in
+	// anonymous mode.
+	DueReminderInterval time.Duration
+
 	// WallEnabled gates the Scrumbaby feature. When false, all /wall routes
 	// return 404 and the frontend hides the Wall topbar button. Defaults on;
 	// set SCRUMBOY_WALL_ENABLED=0 to disable (see config.FromEnv semantics).
@@ -198,6 +203,8 @@ type Server struct {
 	notificationMailWorker  *mailWorker
 	notificationMailCancel  context.CancelFunc
 	notificationMailDone    <-chan struct{}
+	dueReminderCancel       context.CancelFunc
+	dueReminderDone         <-chan struct{}
 	emailNotifier           *emailNotifier
 
 	authRateLimit                  *ratelimit.Limiter
@@ -379,6 +386,7 @@ type storeAPI interface {
 	GetProjectIDForTodo(ctx context.Context, todoID int64) (int64, error)
 	MoveTodo(ctx context.Context, todoID int64, toColumnKey string, afterID, beforeID *int64, mode store.Mode) (store.Todo, error)
 	GetTodoByLocalID(ctx context.Context, projectID, localID int64, mode store.Mode) (store.Todo, error)
+	GetTodoDueReminderState(ctx context.Context, todoID int64) (store.Todo, bool, error)
 	ArchiveTodoByLocalID(ctx context.Context, projectID, localID int64, mode store.Mode) (store.TodoArchiveBatchResult, error)
 	RestoreTodoByLocalID(ctx context.Context, projectID, localID int64, mode store.Mode) (store.TodoArchiveBatchResult, error)
 	ArchiveTodosByLocalID(ctx context.Context, projectID int64, localIDs []int64, mode store.Mode) (store.TodoArchiveBatchResult, error)
@@ -407,6 +415,10 @@ type storeAPI interface {
 	GetEmailNotifyOrgDefault(ctx context.Context) (store.EmailNotifyPref, bool, error)
 	SetEmailNotifyOrgDefault(ctx context.Context, requesterID int64, raw string) error
 	ClearEmailNotifyOrgDefault(ctx context.Context, requesterID int64) error
+	GetDueReminderLeadHours(ctx context.Context) (hours int, customized bool, err error)
+	SetDueReminderLeadHours(ctx context.Context, requesterID int64, hours int) error
+	ClearDueReminderLeadHours(ctx context.Context, requesterID int64) error
+	ClaimDueReminders(ctx context.Context, now time.Time, limit int) ([]store.DueReminder, error)
 	GetDefaultBoardOrgSetting(ctx context.Context) (projectID int64, role store.ProjectRole, customized bool, err error)
 	SetDefaultBoardOrgSetting(ctx context.Context, requesterID, projectID int64, role store.ProjectRole) error
 	ClearDefaultBoardOrgSetting(ctx context.Context, requesterID int64) error
@@ -727,6 +739,13 @@ func NewServer(st storeAPI, opts Options) *Server {
 		markdownNotesEnabled:           opts.MarkdownNotesEnabled,
 		mermaidNotesEnabled:            opts.MermaidNotesEnabled && opts.MarkdownNotesEnabled,
 	}
+	if mode != "anonymous" {
+		scheduler := newDueReminderScheduler(st, server.PublishEvent, opts.DueReminderInterval, logger)
+		reminderCtx, reminderCancel := context.WithCancel(context.Background())
+		server.dueReminderCancel = reminderCancel
+		server.dueReminderDone = scheduler.Done()
+		go scheduler.Run(reminderCtx)
+	}
 	server.wallNoteMutations = wallapp.NewRESTNoteService(wallapp.RESTNoteServiceDependencies{
 		Roles:     st,
 		Mutations: st,
@@ -767,10 +786,15 @@ func NewServer(st storeAPI, opts Options) *Server {
 		Claims:    st,
 		Publisher: projectClaimPublisher{server: server},
 	})
-	// Every todo-service refresh reason (create, non-assignment update, move,
-	// archive, restore, delete) changes the allowlisted public projection.
+	// Todo updates carry a transaction-authoritative public-projection marker so
+	// private-only due-date changes do not invalidate public boards. Other todo
+	// refresh reasons always change the allowlisted public projection.
 	// Assignment-driven updates skip this publisher and use todo.assigned.
 	boardRefreshPublisher := todoapp.BoardRefreshPublisherFunc(func(ctx context.Context, projectID int64, reason string, entity refresh.Entity) {
+		if reason == todoapp.RefreshReasonTodoUpdated {
+			server.emitRefreshNeeded(ctx, projectID, reason, entity)
+			return
+		}
 		server.emitPublicRefreshNeeded(ctx, projectID, reason, entity)
 	})
 	creatorRequestPublisher := todoapp.CreatorNotificationRequestPublisher(server)
@@ -1036,6 +1060,20 @@ func (s *Server) ShutdownPublicStreams() {
 // queued item or send attempt. Call from main on shutdown.
 func (s *Server) Close(ctx context.Context) {
 	s.ShutdownPublicStreams()
+	// The reminder scheduler is a producer for the webhook and mail workers, so it
+	// stops and finishes publishing before they are sealed; otherwise a tick that
+	// already committed its claims would hand reminders to consumers that no longer
+	// accept them and, delivery being at-most-once, lose them for good.
+	if s.dueReminderCancel != nil {
+		s.dueReminderCancel()
+	}
+	if s.dueReminderDone != nil {
+		select {
+		case <-s.dueReminderDone:
+		case <-ctx.Done():
+			s.logger.Printf("shutdown: due reminder scheduler did not finish before deadline")
+		}
+	}
 	if s.webhookQueue != nil {
 		s.webhookQueue.Seal()
 	}

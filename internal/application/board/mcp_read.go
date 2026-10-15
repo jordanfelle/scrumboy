@@ -354,6 +354,11 @@ func mcpBoardLaneCursor(todo store.Todo, sortOrder store.SortOrder) string {
 	switch sortOrder {
 	case store.SortOrderNewest, store.SortOrderOldest:
 		return fmt.Sprintf("%d:%d", todo.CreatedAt.UnixMilli(), todo.ID)
+	case store.SortOrderDue:
+		if todo.DueAt == nil {
+			return fmt.Sprintf("%d:%d", int64(math.MaxInt64), todo.ID)
+		}
+		return fmt.Sprintf("%d:%d", todo.DueAt.UnixMilli(), todo.ID)
 	default:
 		return fmt.Sprintf("%d:%d", todo.Rank, todo.ID)
 	}

@@ -81,6 +81,12 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, rest []stri
 		return
 	}
 
+	if rest[0] == "settings" && len(rest) == 2 && rest[1] == "due-reminder" {
+		// GET/PUT/DELETE /api/admin/settings/due-reminder
+		s.handleAdminDueReminder(w, r, userID)
+		return
+	}
+
 	if rest[0] == "settings" && len(rest) == 2 && rest[1] == "default-board" {
 		// GET/PUT/DELETE /api/admin/settings/default-board
 		s.handleAdminDefaultBoard(w, r, userID)
@@ -432,6 +438,55 @@ func (s *Server) handleAdminDefaultBoard(w http.ResponseWriter, r *http.Request,
 		// Existing users' memberships are untouched; subsequent users get no
 		// seeded project_members row.
 		if err := s.store.ClearDefaultBoardOrgSetting(ctx, requesterID); err != nil {
+			writeStoreErr(w, err, false)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed", nil)
+	}
+}
+
+// handleAdminDueReminder reads, sets or resets the org-wide "due soon" reminder
+// lead time. 0 hours disables reminders.
+func (s *Server) handleAdminDueReminder(w http.ResponseWriter, r *http.Request, requesterID int64) {
+	ctx := s.requestContext(r)
+
+	switch r.Method {
+	case http.MethodGet:
+		// GET /api/admin/settings/due-reminder
+		hours, customized, err := s.store.GetDueReminderLeadHours(ctx)
+		if err != nil {
+			writeStoreErr(w, err, false)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"leadHours": hours, "customized": customized, "defaultLeadHours": store.DefaultDueReminderLeadHours})
+		return
+
+	case http.MethodPut:
+		// PUT /api/admin/settings/due-reminder - Body: { leadHours: number } (0 disables)
+		var in struct {
+			LeadHours *int `json:"leadHours"`
+		}
+		if err := readJSON(w, r, s.maxBody, &in); err != nil {
+			return
+		}
+		if in.LeadHours == nil {
+			writeValidationError(w, "missing leadHours", "missing_lead_hours", map[string]any{"field": "leadHours"})
+			return
+		}
+		if err := s.store.SetDueReminderLeadHours(ctx, requesterID, *in.LeadHours); err != nil {
+			writeStoreErr(w, err, false)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"leadHours": *in.LeadHours, "customized": true, "defaultLeadHours": store.DefaultDueReminderLeadHours})
+		return
+
+	case http.MethodDelete:
+		// DELETE /api/admin/settings/due-reminder - reset to the default lead time.
+		if err := s.store.ClearDueReminderLeadHours(ctx, requesterID); err != nil {
 			writeStoreErr(w, err, false)
 			return
 		}

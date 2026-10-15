@@ -113,6 +113,11 @@ func laneCursor(t Todo, sortOrder SortOrder) string {
 	switch sortOrder {
 	case SortOrderNewest, SortOrderOldest:
 		return fmt.Sprintf("%d:%d", t.CreatedAt.UnixMilli(), t.ID)
+	case SortOrderDue:
+		if t.DueAt == nil {
+			return fmt.Sprintf("%d:%d", int64(math.MaxInt64), t.ID)
+		}
+		return fmt.Sprintf("%d:%d", t.DueAt.UnixMilli(), t.ID)
 	default:
 		return fmt.Sprintf("%d:%d", t.Rank, t.ID)
 	}
@@ -120,14 +125,17 @@ func laneCursor(t Todo, sortOrder SortOrder) string {
 
 // laneOrderBy returns the ORDER BY fragment (no leading "ORDER BY") for a
 // single lane's todos under the given sortOrder. Default preserves the
-// existing manual drag-rank order; newest/oldest order by created_at with id
-// as a stable tiebreaker.
+// existing manual drag-rank order; newest/oldest order by created_at; due
+// orders chronologically and maps NULL to MaxInt64 so undated todos stay last.
+// All computed orders use id as a stable tiebreaker.
 func laneOrderBy(sortOrder SortOrder) string {
 	switch sortOrder {
 	case SortOrderNewest:
 		return "t.created_at DESC, t.id DESC"
 	case SortOrderOldest:
 		return "t.created_at ASC, t.id ASC"
+	case SortOrderDue:
+		return "COALESCE(t.due_at, 9223372036854775807) ASC, t.id ASC"
 	default:
 		return "t.rank ASC, t.id ASC"
 	}
@@ -142,6 +150,8 @@ func laneCursorPredicate(sortOrder SortOrder) string {
 		return " AND (t.created_at, t.id) < (?, ?)"
 	case SortOrderOldest:
 		return " AND (t.created_at, t.id) > (?, ?)"
+	case SortOrderDue:
+		return " AND (COALESCE(t.due_at, 9223372036854775807), t.id) > (?, ?)"
 	default:
 		return " AND (t.rank, t.id) > (?, ?)"
 	}
@@ -401,7 +411,7 @@ func (s *Store) listAllTodosForBoard(ctx context.Context, projectID int64, tagFi
 		args = append(args, searchFilter, searchFilter, searchFilter)
 		rows, err = s.db.QueryContext(ctx, `
 SELECT
-  t.id, t.project_id, t.local_id, t.title, t.body, t.column_key, t.rank, t.estimation_points, t.assignee_user_id, t.created_by_user_id, t.sprint_id, t.priority_key, t.created_at, t.updated_at, t.done_at, t.archived_at
+  t.id, t.project_id, t.local_id, t.title, t.body, t.column_key, t.rank, t.estimation_points, t.assignee_user_id, t.created_by_user_id, t.sprint_id, t.priority_key, t.created_at, t.updated_at, t.done_at, t.archived_at, t.due_at
 FROM todos t
 WHERE
   t.project_id = ?
@@ -426,7 +436,7 @@ ORDER BY `+orderBy+`
 		args = append(args, priorityArgs...)
 		args = append(args, searchFilter, searchFilter, searchFilter)
 		rows, err = s.db.QueryContext(ctx, filterCTE+`SELECT
-  t.id, t.project_id, t.local_id, t.title, t.body, t.column_key, t.rank, t.estimation_points, t.assignee_user_id, t.created_by_user_id, t.sprint_id, t.priority_key, t.created_at, t.updated_at, t.done_at, t.archived_at
+  t.id, t.project_id, t.local_id, t.title, t.body, t.column_key, t.rank, t.estimation_points, t.assignee_user_id, t.created_by_user_id, t.sprint_id, t.priority_key, t.created_at, t.updated_at, t.done_at, t.archived_at, t.due_at
 FROM todos t
 INNER JOIN tagged_todos ft ON ft.todo_id = t.id
 WHERE
@@ -458,7 +468,8 @@ ORDER BY `+orderBy+`
 		var priorityKey sql.NullString
 		var doneAtMs sql.NullInt64
 		var archivedAtMs sql.NullInt64
-		if err := rows.Scan(&t.ID, &t.ProjectID, &localID, &t.Title, &t.Body, &columnKey, &t.Rank, &estimationPoints, &assigneeUserID, &createdByUserID, &sprintID, &priorityKey, &createdAtMs, &updatedAtMs, &doneAtMs, &archivedAtMs); err != nil {
+		var dueAtMs sql.NullInt64
+		if err := rows.Scan(&t.ID, &t.ProjectID, &localID, &t.Title, &t.Body, &columnKey, &t.Rank, &estimationPoints, &assigneeUserID, &createdByUserID, &sprintID, &priorityKey, &createdAtMs, &updatedAtMs, &doneAtMs, &archivedAtMs, &dueAtMs); err != nil {
 			return nil, fmt.Errorf("scan todo: %w", err)
 		}
 		if !localID.Valid {
@@ -495,6 +506,10 @@ ORDER BY `+orderBy+`
 		if archivedAtMs.Valid {
 			at := time.UnixMilli(archivedAtMs.Int64).UTC()
 			t.ArchivedAt = &at
+		}
+		if dueAtMs.Valid {
+			at := time.UnixMilli(dueAtMs.Int64).UTC()
+			t.DueAt = &at
 		}
 		todoIDs = append(todoIDs, t.ID)
 		out = append(out, t)
@@ -579,7 +594,7 @@ func (s *Store) listAllTodosForBoardWithCounts(ctx context.Context, projectID in
 		args = append(args, searchFilter, searchFilter, searchFilter)
 		rows, err = s.db.QueryContext(ctx, `
 SELECT
-  t.id, t.project_id, t.local_id, t.title, t.body, t.column_key, t.rank, t.estimation_points, t.assignee_user_id, t.created_by_user_id, t.sprint_id, t.priority_key, t.created_at, t.updated_at, t.done_at, t.archived_at,
+  t.id, t.project_id, t.local_id, t.title, t.body, t.column_key, t.rank, t.estimation_points, t.assignee_user_id, t.created_by_user_id, t.sprint_id, t.priority_key, t.created_at, t.updated_at, t.done_at, t.archived_at, t.due_at,
   COUNT(*) OVER (PARTITION BY t.column_key) AS lane_total
 FROM todos t
 WHERE
@@ -602,7 +617,7 @@ ORDER BY `+orderBy+`
 		args = append(args, priorityArgs...)
 		args = append(args, searchFilter, searchFilter, searchFilter)
 		rows, err = s.db.QueryContext(ctx, filterCTE+`SELECT
-  t.id, t.project_id, t.local_id, t.title, t.body, t.column_key, t.rank, t.estimation_points, t.assignee_user_id, t.created_by_user_id, t.sprint_id, t.priority_key, t.created_at, t.updated_at, t.done_at, t.archived_at,
+  t.id, t.project_id, t.local_id, t.title, t.body, t.column_key, t.rank, t.estimation_points, t.assignee_user_id, t.created_by_user_id, t.sprint_id, t.priority_key, t.created_at, t.updated_at, t.done_at, t.archived_at, t.due_at,
   COUNT(*) OVER (PARTITION BY t.column_key) AS lane_total
 FROM todos t
 INNER JOIN tagged_todos ft ON ft.todo_id = t.id
@@ -633,8 +648,9 @@ ORDER BY `+orderBy+`
 		var priorityKey sql.NullString
 		var doneAtMs sql.NullInt64
 		var archivedAtMs sql.NullInt64
+		var dueAtMs sql.NullInt64
 		var laneTotal int
-		if err := rows.Scan(&t.ID, &t.ProjectID, &localID, &t.Title, &t.Body, &columnKey, &t.Rank, &estimationPoints, &assigneeUserID, &createdByUserID, &sprintID, &priorityKey, &createdAtMs, &updatedAtMs, &doneAtMs, &archivedAtMs, &laneTotal); err != nil {
+		if err := rows.Scan(&t.ID, &t.ProjectID, &localID, &t.Title, &t.Body, &columnKey, &t.Rank, &estimationPoints, &assigneeUserID, &createdByUserID, &sprintID, &priorityKey, &createdAtMs, &updatedAtMs, &doneAtMs, &archivedAtMs, &dueAtMs, &laneTotal); err != nil {
 			return nil, fmt.Errorf("scan todo: %w", err)
 		}
 		if !localID.Valid {
@@ -672,6 +688,10 @@ ORDER BY `+orderBy+`
 			at := time.UnixMilli(archivedAtMs.Int64).UTC()
 			t.ArchivedAt = &at
 		}
+		if dueAtMs.Valid {
+			at := time.UnixMilli(dueAtMs.Int64).UTC()
+			t.DueAt = &at
+		}
 		todoIDs = append(todoIDs, t.ID)
 		out = append(out, todoWithLaneTotal{Todo: t, LaneTotal: laneTotal})
 	}
@@ -692,8 +712,9 @@ ORDER BY `+orderBy+`
 // ListTodosForBoardLane returns todos for one status with cursor-based pagination.
 // Cursor format is "a:b" where (a, b) depends on sortOrder: for the default manual
 // order it's "rank:id" (DB id, not localId); for sortOrder=newest/oldest it's
-// "createdAtMs:id". Returns (items, nextCursor, hasMore). nextCursor is empty when
-// hasMore is false.
+// "createdAtMs:id"; for sortOrder=due it's "dueAtMs:id", with MaxInt64 as the
+// dueAtMs for undated todos. Returns (items, nextCursor, hasMore). nextCursor is
+// empty when hasMore is false.
 //
 // Ordering contract: the query's ORDER BY and cursor predicate are chosen together by
 // laneOrderBy/laneCursorPredicate for the given sortOrder, and laneCursor encodes the
@@ -738,7 +759,7 @@ func (s *Store) listTodosForBoardLaneResolved(ctx context.Context, projectID int
 		args = append(args, afterA, afterB, searchFilter, searchFilter, searchFilter, fetchLimit)
 		rows, err = s.db.QueryContext(ctx, `
 SELECT
-  t.id, t.project_id, t.local_id, t.title, t.body, t.column_key, t.rank, t.estimation_points, t.assignee_user_id, t.created_by_user_id, t.sprint_id, t.priority_key, t.created_at, t.updated_at, t.done_at, t.archived_at
+  t.id, t.project_id, t.local_id, t.title, t.body, t.column_key, t.rank, t.estimation_points, t.assignee_user_id, t.created_by_user_id, t.sprint_id, t.priority_key, t.created_at, t.updated_at, t.done_at, t.archived_at, t.due_at
 FROM todos t
 WHERE
   t.project_id = ? AND t.column_key = ?
@@ -765,7 +786,7 @@ LIMIT ?
 		args = append(args, priorityArgs...)
 		args = append(args, afterA, afterB, searchFilter, searchFilter, searchFilter, fetchLimit)
 		rows, err = s.db.QueryContext(ctx, filterCTE+`SELECT
-  t.id, t.project_id, t.local_id, t.title, t.body, t.column_key, t.rank, t.estimation_points, t.assignee_user_id, t.created_by_user_id, t.sprint_id, t.priority_key, t.created_at, t.updated_at, t.done_at, t.archived_at
+  t.id, t.project_id, t.local_id, t.title, t.body, t.column_key, t.rank, t.estimation_points, t.assignee_user_id, t.created_by_user_id, t.sprint_id, t.priority_key, t.created_at, t.updated_at, t.done_at, t.archived_at, t.due_at
 FROM todos t
 INNER JOIN tagged_todos ft ON ft.todo_id = t.id
 WHERE
@@ -799,7 +820,8 @@ LIMIT ?
 		var priorityKey sql.NullString
 		var doneAtMs sql.NullInt64
 		var archivedAtMs sql.NullInt64
-		if err := rows.Scan(&t.ID, &t.ProjectID, &localID, &t.Title, &t.Body, &rowColumnKey, &t.Rank, &estimationPoints, &assigneeUserID, &createdByUserID, &sprintID, &priorityKey, &createdAtMs, &updatedAtMs, &doneAtMs, &archivedAtMs); err != nil {
+		var dueAtMs sql.NullInt64
+		if err := rows.Scan(&t.ID, &t.ProjectID, &localID, &t.Title, &t.Body, &rowColumnKey, &t.Rank, &estimationPoints, &assigneeUserID, &createdByUserID, &sprintID, &priorityKey, &createdAtMs, &updatedAtMs, &doneAtMs, &archivedAtMs, &dueAtMs); err != nil {
 			return nil, "", false, fmt.Errorf("scan todo: %w", err)
 		}
 		if !localID.Valid {
@@ -836,6 +858,10 @@ LIMIT ?
 		if archivedAtMs.Valid {
 			at := time.UnixMilli(archivedAtMs.Int64).UTC()
 			t.ArchivedAt = &at
+		}
+		if dueAtMs.Valid {
+			at := time.UnixMilli(dueAtMs.Int64).UTC()
+			t.DueAt = &at
 		}
 		todoIDs = append(todoIDs, t.ID)
 		out = append(out, t)

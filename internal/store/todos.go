@@ -15,11 +15,50 @@ type CreateTodoInput struct {
 	Tags             []string
 	ColumnKey        string
 	EstimationPoints *int64
-	SprintID         *int64  // NULL = backlog
-	AssigneeUserID   *int64  // NULL = unassigned
-	PriorityKey      *string // NULL = no priority set
+	SprintID         *int64     // NULL = backlog
+	AssigneeUserID   *int64     // NULL = unassigned
+	PriorityKey      *string    // NULL = no priority set
+	DueAt            *time.Time // NULL = no due date
 	AfterID          *int64
 	BeforeID         *int64
+}
+
+// Bounds for a due date: after the Unix epoch and before 2100-01-01 UTC. Past
+// dates are valid (the todo is simply overdue).
+const maxDueAtMs int64 = 4102444800000
+
+func validateDueAt(v *time.Time) error {
+	if v == nil {
+		return nil
+	}
+	ms := v.UTC().UnixMilli()
+	if ms <= 0 || ms >= maxDueAtMs {
+		return fmt.Errorf("%w: dueAt out of range", ErrValidation)
+	}
+	return nil
+}
+
+func dueAtArg(v *time.Time) any {
+	if v == nil {
+		return nil
+	}
+	return v.UTC().UnixMilli()
+}
+
+func sameTimePtr(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.UTC().UnixMilli() == b.UTC().UnixMilli()
+}
+
+func cloneTimePtr(v *time.Time) *time.Time {
+	if v == nil {
+		return nil
+	}
+	// Stored with millisecond precision; normalize so the returned value equals a re-read.
+	c := v.UTC().Truncate(time.Millisecond)
+	return &c
 }
 
 func (s *Store) CreateTodo(ctx context.Context, projectID int64, in CreateTodoInput, mode Mode) (Todo, error) {
@@ -31,6 +70,9 @@ func (s *Store) CreateTodo(ctx context.Context, projectID int64, in CreateTodoIn
 		return Todo{}, fmt.Errorf("%w: body too large", ErrValidation)
 	}
 	if err := validateEstimationPoints(in.EstimationPoints); err != nil {
+		return Todo{}, err
+	}
+	if err := validateDueAt(in.DueAt); err != nil {
 		return Todo{}, err
 	}
 	tags, err := normalizeTags(in.Tags)
@@ -242,9 +284,9 @@ func (s *Store) CreateTodo(ctx context.Context, projectID int64, in CreateTodoIn
 			createdByArg = *userIDPtr
 		}
 		res, err := tx.ExecContext(ctx, `
-INSERT INTO todos(project_id, local_id, title, body, column_key, rank, estimation_points, assignee_user_id, sprint_id, priority_key, created_by_user_id, created_at, updated_at, done_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			projectID, localID, in.Title, in.Body, in.ColumnKey, newRank, estimationPoints, assigneeArg, sprintIDArg, priorityKeyArg, createdByArg, nowMs, nowMs, doneAtArg,
+INSERT INTO todos(project_id, local_id, title, body, column_key, rank, estimation_points, assignee_user_id, sprint_id, priority_key, created_by_user_id, created_at, updated_at, done_at, due_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			projectID, localID, in.Title, in.Body, in.ColumnKey, newRank, estimationPoints, assigneeArg, sprintIDArg, priorityKeyArg, createdByArg, nowMs, nowMs, doneAtArg, dueAtArg(in.DueAt),
 		)
 		if err != nil {
 			// Retry on unique collision for (project_id, local_id).
@@ -310,6 +352,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			CreatedByUserID:  cloneInt64Ptr(userIDPtr),
 			SprintID:         cloneInt64Ptr(in.SprintID),
 			PriorityKey:      cloneStringPtr(in.PriorityKey),
+			DueAt:            cloneTimePtr(in.DueAt),
 			Tags:             tags,
 			CreatedAt:        time.UnixMilli(nowMs).UTC(),
 			UpdatedAt:        time.UnixMilli(nowMs).UTC(),
@@ -362,6 +405,8 @@ type UpdateTodoInput struct {
 	KeepTags             bool
 	KeepEstimationPoints bool
 	KeepAssigneeUserID   bool
+	DueAt                *time.Time // nil means clear when DueAtPresent is true
+	DueAtPresent         bool       // false preserves the existing due date
 }
 
 // resolveDoneAtForColumnTransition returns the value to write for done_at.
@@ -555,6 +600,7 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 				return Todo{}, fmt.Errorf("commit update todo: %w", err)
 			}
 			existing.MaterialChanged = bodyChanged
+			existing.PublicProjectionChanged = bodyChanged
 			existing.Body = in.Body
 			existing.UpdatedAt = time.UnixMilli(nowMs).UTC()
 			if err := s.UpdateBoardActivity(ctx, existing.ProjectID); err != nil {
@@ -665,6 +711,14 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 			return Todo{}, err
 		}
 	}
+	effectiveDueAt := cloneTimePtr(existing.DueAt)
+	if in.DueAtPresent {
+		if err := validateDueAt(in.DueAt); err != nil {
+			return Todo{}, err
+		}
+		effectiveDueAt = cloneTimePtr(in.DueAt)
+	}
+	dueAtChanged := !sameTimePtr(existing.DueAt, effectiveDueAt)
 	var effectiveSprint *int64
 	if in.ClearSprint {
 		effectiveSprint = nil
@@ -674,14 +728,14 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 		effectiveSprint = existing.SprintID
 	}
 	// publicFieldsChanged covers only fields in the public board projection;
-	// assignment is private and never marks the public projection changed.
+	// assignment and due date are private and never mark the public projection changed.
 	publicFieldsChanged := existing.Title != in.Title ||
 		existing.Body != in.Body ||
 		!sameInt64Ptr(existing.EstimationPoints, in.EstimationPoints) ||
 		!sameInt64Ptr(existing.SprintID, effectiveSprint) ||
 		!sameStringPtr(existing.PriorityKey, effectivePriorityKey) ||
 		!sameStringSet(existing.Tags, tags)
-	materialChanged := publicFieldsChanged || assignmentChanged
+	materialChanged := publicFieldsChanged || assignmentChanged || dueAtChanged
 
 	var userIDPtr *int64
 	if !ok && len(tags) > 0 {
@@ -746,6 +800,21 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 		}
 	}
 
+	if dueAtChanged {
+		// A new deadline is a new reminder cycle: clear the sent marker.
+		if _, err := tx.ExecContext(ctx, `UPDATE todos SET due_at = ?, due_reminded_at = NULL WHERE id = ?`, dueAtArg(effectiveDueAt), todoID); err != nil {
+			return Todo{}, fmt.Errorf("update todo due date: %w", err)
+		}
+	} else if assignmentChanged && in.AssigneeUserID != nil && existing.DueAt != nil && existing.DueRemindedAt != nil {
+		// The reminder went to the previous assignee, or nobody. The new assignee has
+		// not been told, so re-arm it (a due date already past is marked silently by
+		// the next claim, so this never produces an overdue notice).
+		if _, err := tx.ExecContext(ctx, `UPDATE todos SET due_reminded_at = NULL WHERE id = ?`, todoID); err != nil {
+			return Todo{}, fmt.Errorf("re-arm due reminder: %w", err)
+		}
+		existing.DueRemindedAt = nil
+	}
+
 	if assignmentChanged {
 		var fromAssignee any
 		if existing.AssigneeUserID != nil {
@@ -804,6 +873,9 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 	if !sameStringPtr(existing.PriorityKey, effectivePriorityKey) {
 		changedFields = append(changedFields, "priority")
 	}
+	if dueAtChanged {
+		changedFields = append(changedFields, "due")
+	}
 	existingTags := make(map[string]struct{}, len(originalTags))
 	for _, t := range originalTags {
 		existingTags[t] = struct{}{}
@@ -841,9 +913,13 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 				meta["tags_removed"] = tagsRemoved
 			}
 		}
-		if containsString(changedFields, "sprint") || containsString(changedFields, "estimation") || containsString(changedFields, "priority") {
+		if containsString(changedFields, "sprint") || containsString(changedFields, "estimation") || containsString(changedFields, "priority") || containsString(changedFields, "due") {
 			before := make(map[string]any)
 			after := make(map[string]any)
+			if containsString(changedFields, "due") {
+				before["due_at"] = dueAtArg(existing.DueAt)
+				after["due_at"] = dueAtArg(effectiveDueAt)
+			}
 			if containsString(changedFields, "sprint") {
 				before["sprint_id"] = existing.SprintID
 				after["sprint_id"] = effectiveSprint
@@ -888,6 +964,10 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 	existing.AssigneeUserID = cloneInt64Ptr(in.AssigneeUserID)
 	existing.EstimationPoints = cloneInt64Ptr(in.EstimationPoints)
 	existing.PriorityKey = cloneStringPtr(effectivePriorityKey)
+	if dueAtChanged {
+		existing.DueAt = effectiveDueAt
+		existing.DueRemindedAt = nil
+	}
 	if updateSprint {
 		if in.ClearSprint {
 			existing.SprintID = nil
@@ -898,6 +978,7 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 	existing.UpdatedAt = time.UnixMilli(nowMs).UTC()
 	existing.AssignmentChanged = assignmentChanged
 	existing.MaterialChanged = materialChanged
+	existing.PublicProjectionChanged = publicFieldsChanged
 
 	if s.todoAssignedPublisher != nil && assignmentChanged && !isAnonymousBoard {
 		actorID, _ := UserIDFromContext(ctx)
@@ -1164,7 +1245,7 @@ func (s *Store) MoveTodo(ctx context.Context, todoID int64, toColumnKey string, 
 }
 
 func getTodoTx(ctx context.Context, tx *sql.Tx, todoID int64) (Todo, error) {
-	row := tx.QueryRowContext(ctx, `SELECT id, project_id, local_id, title, body, column_key, rank, estimation_points, assignee_user_id, created_by_user_id, sprint_id, priority_key, created_at, updated_at, done_at, archived_at FROM todos WHERE id=?`, todoID)
+	row := tx.QueryRowContext(ctx, `SELECT id, project_id, local_id, title, body, column_key, rank, estimation_points, assignee_user_id, created_by_user_id, sprint_id, priority_key, created_at, updated_at, done_at, archived_at, due_at, due_reminded_at FROM todos WHERE id=?`, todoID)
 	var t Todo
 	var columnKey string
 	var createdAtMs, updatedAtMs int64
@@ -1176,7 +1257,8 @@ func getTodoTx(ctx context.Context, tx *sql.Tx, todoID int64) (Todo, error) {
 	var priorityKey sql.NullString
 	var doneAtMs sql.NullInt64
 	var archivedAtMs sql.NullInt64
-	if err := row.Scan(&t.ID, &t.ProjectID, &localID, &t.Title, &t.Body, &columnKey, &t.Rank, &estimationPoints, &assigneeUserID, &createdByUserID, &sprintID, &priorityKey, &createdAtMs, &updatedAtMs, &doneAtMs, &archivedAtMs); err != nil {
+	var dueAtMs, dueRemindedAtMs sql.NullInt64
+	if err := row.Scan(&t.ID, &t.ProjectID, &localID, &t.Title, &t.Body, &columnKey, &t.Rank, &estimationPoints, &assigneeUserID, &createdByUserID, &sprintID, &priorityKey, &createdAtMs, &updatedAtMs, &doneAtMs, &archivedAtMs, &dueAtMs, &dueRemindedAtMs); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Todo{}, ErrNotFound
 		}
@@ -1224,6 +1306,14 @@ func getTodoTx(ctx context.Context, tx *sql.Tx, todoID int64) (Todo, error) {
 	if archivedAtMs.Valid {
 		at := time.UnixMilli(archivedAtMs.Int64).UTC()
 		t.ArchivedAt = &at
+	}
+	if dueAtMs.Valid {
+		at := time.UnixMilli(dueAtMs.Int64).UTC()
+		t.DueAt = &at
+	}
+	if dueRemindedAtMs.Valid {
+		at := time.UnixMilli(dueRemindedAtMs.Int64).UTC()
+		t.DueRemindedAt = &at
 	}
 
 	tags, err := listTodoTagsTx(ctx, tx, t.ID)

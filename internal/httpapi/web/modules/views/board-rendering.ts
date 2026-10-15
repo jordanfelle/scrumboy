@@ -1,4 +1,5 @@
 import { columnsSpec } from '../features/drag-drop.js';
+import { formatDueBadge, formatDueDateTooltip, isOverdue } from '../dialogs/todo-due.js';
 import type { BoardMember } from '../state/state.js';
 import { Board, NO_PRIORITY_FILTER_VALUE, PriorityTier, Todo } from '../types.js';
 import {
@@ -36,7 +37,17 @@ export type RenderTodoCardOpts = {
   showPointsMode?: boolean;
   selectedIds?: Set<number>;
   priorityTiers?: Record<string, { name: string; color: string }>;
+  /** Column keys whose cards count as done (never shown as overdue). */
+  doneColumnKeys?: Set<string>;
 };
+
+export function buildDoneColumnKeys(board: Board): Set<string> {
+  const keys = new Set<string>();
+  for (const col of board.columnOrder ?? []) {
+    if (col.isDone) keys.add(col.key);
+  }
+  return keys;
+}
 
 export function buildPriorityTierMap(board: Board): Record<string, { name: string; color: string }> {
   const tiers = board.priorityOrder ?? [];
@@ -199,6 +210,17 @@ export function renderTodoCard(
   const content = renderStoryCardContent(todo, membersByUserId, opts);
   const borderStyle = columnColor ? ` style="border-color:${escapeHTML(columnColor)}"` : "";
   const selectedClass = opts?.selectedIds?.has(todo.id) ? " card--selected" : "";
+  const doneKey = (todo.columnKey || todo.status || "").toLowerCase();
+  const overdue = !todo.archivedAt
+    && isOverdue(todo.dueAt, opts?.doneColumnKeys?.has(doneKey) ?? false);
+  let overdueWarningHTML = "";
+  if (overdue && todo.dueAt) {
+    const fullDate = formatDueDateTooltip(todo.dueAt);
+    if (fullDate) {
+      const warning = escapeHTML(t("todo.due.overdueWarning", { date: fullDate }));
+      overdueWarningHTML = `<span class="card__overdue-warning" title="${escapeHTML(fullDate)}" aria-label="${warning}">!</span>`;
+    }
+  }
   const dragHandleHTML = `
       <div class="card__drag-handle" aria-label="${escapeHTML(t("board.todo.dragCard"))}" data-i18n-aria-label="board.todo.dragCard">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
@@ -214,7 +236,7 @@ export function renderTodoCard(
   return `
     <button class="card card--${todo.status.toLowerCase()}${selectedClass}"${borderStyle} data-todo-id="${todo.id}" data-todo-local-id="${todo.localId}"${todo.assigneeUserId != null ? ` data-assignee-user-id="${todo.assigneeUserId}"` : ""} id="todo_${todo.id}" type="button">
       ${content}
-      ${dragHandleHTML}
+      <div class="card__top-actions">${overdueWarningHTML}${dragHandleHTML}</div>
     </button>
   `;
 }
@@ -250,7 +272,17 @@ export function renderStoryCardContent(
   const priorityHTML = priorityTier
     ? `<span class="card__priority"${priorityStyle}${titleAttr(FIELD_TOOLTIPS.priority)} aria-label="${escapeHTML(t("todo.fields.priority"))}: ${escapeHTML(priorityTier.name)}">${escapeHTML(priorityTier.name)}</span>`
     : "";
-  const footerContent = priorityHTML + pointsHTML + avatarHTML;
+  let dueHTML = "";
+  if (todo.dueAt) {
+    const label = formatDueBadge(todo.dueAt);
+    if (label) {
+      const doneKey = (todo.columnKey || todo.status || "").toLowerCase();
+      const overdue = isOverdue(todo.dueAt, opts?.doneColumnKeys?.has(doneKey) ?? false);
+      const aria = escapeHTML(t("todo.due.cardLabel", { date: label }));
+      dueHTML = `<span class="card__due${overdue ? " card__due--overdue" : ""}" title="${aria}" aria-label="${aria}">${escapeHTML(label)}</span>`;
+    }
+  }
+  const footerContent = dueHTML + priorityHTML + pointsHTML + avatarHTML;
   return `
       <div class="card__content">
         <div class="card__title-row">
@@ -546,10 +578,12 @@ function sortFilterOptionsHtml(sort: string | null): string {
   const defaultLabel = escapeHTML(t("board.filters.defaultOrder"));
   const newestLabel = escapeHTML(t("board.filters.newestFirst"));
   const oldestLabel = escapeHTML(t("board.filters.oldestFirst"));
+  const dueSoonLabel = escapeHTML(t("board.filters.dueSoon"));
   return `
       <button type="button" class="${optionClass("")}" data-sort-option="" data-i18n-text="board.filters.defaultOrder">${defaultLabel}</button>
       <button type="button" class="${optionClass("newest")}" data-sort-option="newest" data-i18n-text="board.filters.newestFirst">${newestLabel}</button>
       <button type="button" class="${optionClass("oldest")}" data-sort-option="oldest" data-i18n-text="board.filters.oldestFirst">${oldestLabel}</button>
+      <button type="button" class="${optionClass("due")}" data-sort-option="due" data-i18n-text="board.filters.dueSoon">${dueSoonLabel}</button>
   `;
 }
 

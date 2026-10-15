@@ -223,9 +223,9 @@ func (s *Server) handlePreparedSlugBoardLane(
 	var afterA, afterB int64
 	if strings.TrimSpace(afterCursor) == "" {
 		// No cursor yet (first page): use a bound that matches every row for the
-		// active sortOrder's comparison direction. For the default/oldest
-		// ascending order this is (0, 0), same as today's behavior. For
-		// newest (descending), a low bound would incorrectly exclude every row.
+		// active sortOrder's comparison direction. For the default/oldest/due
+		// ascending orders this is (0, 0), same as today's behavior. For newest
+		// (descending), a low bound would incorrectly exclude every row.
 		if sortOrder == store.SortOrderNewest {
 			afterA, afterB = math.MaxInt64, math.MaxInt64
 		}

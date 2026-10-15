@@ -22,7 +22,7 @@ let mobileTabIntroGlowTimer: ReturnType<typeof setTimeout> | null = null;
 
 function isChronologicalSortActive(): boolean {
   const sort = getSortFromUrl();
-  return sort === "newest" || sort === "oldest";
+  return sort === "newest" || sort === "oldest" || sort === "due";
 }
 
 /**

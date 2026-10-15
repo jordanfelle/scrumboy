@@ -404,9 +404,9 @@ func bulkInsertTodos(ctx context.Context, tx *sql.Tx, projectID int64, todos []T
 
 		// Insert todo (schema uses column_key, not status)
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO todos(project_id, local_id, title, body, column_key, rank, estimation_points, assignee_user_id, created_by_user_id, sprint_id, priority_key, created_at, updated_at, done_at, archived_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			projectID, tExport.LocalID, tExport.Title, tExport.Body, columnKey, rank, estimationPoints, assigneeForSQL, createdByForSQL, sprintIDForSQL, priorityForSQL, createdAtMs, updatedAtMs, doneAtForInsert, archivedAtForInsert)
+			INSERT INTO todos(project_id, local_id, title, body, column_key, rank, estimation_points, assignee_user_id, created_by_user_id, sprint_id, priority_key, created_at, updated_at, done_at, archived_at, due_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			projectID, tExport.LocalID, tExport.Title, tExport.Body, columnKey, rank, estimationPoints, assigneeForSQL, createdByForSQL, sprintIDForSQL, priorityForSQL, createdAtMs, updatedAtMs, doneAtForInsert, archivedAtForInsert, importDueAtForInsert(tExport))
 		if err != nil {
 			if strict {
 				return nil, fmt.Errorf("insert todo (strict mode): %w", err)
@@ -419,9 +419,9 @@ func bulkInsertTodos(ctx context.Context, tx *sql.Tx, projectID int64, todos []T
 				}
 				newLocalID := maxLocalID + 1
 				res, err = tx.ExecContext(ctx, `
-					INSERT INTO todos(project_id, local_id, title, body, column_key, rank, estimation_points, assignee_user_id, created_by_user_id, sprint_id, priority_key, created_at, updated_at, done_at, archived_at)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-					projectID, newLocalID, tExport.Title, tExport.Body, columnKey, rank, estimationPoints, assigneeForSQL, createdByForSQL, sprintIDForSQL, priorityForSQL, createdAtMs, updatedAtMs, doneAtForInsert, archivedAtForInsert)
+					INSERT INTO todos(project_id, local_id, title, body, column_key, rank, estimation_points, assignee_user_id, created_by_user_id, sprint_id, priority_key, created_at, updated_at, done_at, archived_at, due_at)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					projectID, newLocalID, tExport.Title, tExport.Body, columnKey, rank, estimationPoints, assigneeForSQL, createdByForSQL, sprintIDForSQL, priorityForSQL, createdAtMs, updatedAtMs, doneAtForInsert, archivedAtForInsert, importDueAtForInsert(tExport))
 				if err != nil {
 					return nil, fmt.Errorf("insert todo with regenerated local_id: %w", err)
 				}

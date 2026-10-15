@@ -15,11 +15,13 @@ import {
   todoEstimationField,
   todoEstimationPoints,
   todoPriority,
+  todoDueAt,
   todoStatus,
   todoTags,
   todoTitle,
 } from '../dom/elements.js';
 import { apiFetch } from '../api.js';
+import { isoToLocalInputValue, resolveDueAtForOverdueCheck, setTodoOverdueIndicatorVisibility } from './todo-due.js';
 import { DIALOG_CLOSE_REQUEST_EVENT, type DialogCloseRequestDetail } from '../core/modal-outside-click.js';
 import { renderMarkdownPreviewInto } from '../markdown-preview.js';
 import { THEME_CHANGE_EVENT } from '../theme.js';
@@ -76,10 +78,12 @@ type TodoDialogSnapshot = {
   assignee: string;
   sprint: string;
   priority: string;
+  dueAt: string;
 };
 
 let todoNotesMode: TodoNotesMode = "markdown";
 let todoNotesPreviewBound = false;
+let todoOverdueStateAbort: AbortController | null = null;
 let todoDialogCloseGuardsBound = false;
 let todoTooltipsApplied = false;
 let todoDialogBaseline: TodoDialogSnapshot | null = null;
@@ -286,6 +290,7 @@ function readTodoDialogSnapshot(): TodoDialogSnapshot {
     assignee: assignee?.value ?? "",
     sprint: sprint?.value ?? "",
     priority: (todoPriority as HTMLSelectElement | null)?.value ?? "",
+    dueAt: (todoDueAt as HTMLInputElement | null)?.value ?? "",
   };
 }
 
@@ -306,6 +311,7 @@ function isTodoDialogDirty(): boolean {
     current.assignee !== todoDialogBaseline.assignee ||
     current.sprint !== todoDialogBaseline.sprint ||
     current.priority !== todoDialogBaseline.priority ||
+    current.dueAt !== todoDialogBaseline.dueAt ||
     current.tags.length !== todoDialogBaseline.tags.length ||
     current.tags.some((tag, idx) => tag !== todoDialogBaseline?.tags[idx])
   );
@@ -657,6 +663,7 @@ export async function openTodoDialog(opts: {
     const selected = populateTodoStatusOptions(initialKey);
     (todoStatus as HTMLSelectElement).value = selected;
     populateTodoPriorityOptions(null);
+    if (todoDueAt) (todoDueAt as HTMLInputElement).value = "";
     (deleteTodoBtn as HTMLElement).style.display = "none";
     if (archiveTodoBtn) (archiveTodoBtn as HTMLElement).style.display = "none";
     if (restoreTodoBtn) (restoreTodoBtn as HTMLElement).style.display = "none";
@@ -673,6 +680,7 @@ export async function openTodoDialog(opts: {
     const selected = populateTodoStatusOptions(initialKey);
     (todoStatus as HTMLSelectElement).value = selected;
     populateTodoPriorityOptions(todo.priorityKey);
+    if (todoDueAt) (todoDueAt as HTMLInputElement).value = isoToLocalInputValue(todo.dueAt);
     (deleteTodoBtn as HTMLElement).style.display = permissions.canDeleteTodo ? "" : "none";
     if (archiveTodoBtn) (archiveTodoBtn as HTMLElement).style.display = permissions.canArchiveTodo ? "" : "none";
     if (restoreTodoBtn) (restoreTodoBtn as HTMLElement).style.display = permissions.canRestoreTodo ? "" : "none";
@@ -686,6 +694,28 @@ export async function openTodoDialog(opts: {
     setDates(todo.createdAt, todo.updatedAt);
     setCreatedBy(todo.createdByUserId);
   }
+  const overdueIndicator = document.getElementById("todoDialogOverdue") as HTMLElement | null;
+  const syncOverdueIndicator = () => {
+    const selectedKey = (todoStatus as HTMLSelectElement | null)?.value ?? "";
+    const inDoneColumn = getBoard()?.columnOrder?.some((column) =>
+      column.key.toLowerCase() === selectedKey.toLowerCase() && column.isDone === true,
+    ) ?? false;
+    const dueAt = resolveDueAtForOverdueCheck(
+      (todoDueAt as HTMLInputElement | null)?.value ?? "",
+      mode === "edit" ? todo?.dueAt : null,
+    );
+    setTodoOverdueIndicatorVisibility(overdueIndicator, {
+      mode: mode === "edit" ? "edit" : "create",
+      dueAt,
+      archived: isArchived,
+      inDoneColumn,
+    });
+  };
+  todoOverdueStateAbort?.abort();
+  todoOverdueStateAbort = new AbortController();
+  todoDueAt?.addEventListener("input", syncOverdueIndicator, { signal: todoOverdueStateAbort.signal });
+  todoStatus?.addEventListener("change", syncOverdueIndicator, { signal: todoOverdueStateAbort.signal });
+  syncOverdueIndicator();
   setTodoNotesMode("markdown");
 
   const tagInputEl = document.getElementById("todoTags") as HTMLInputElement | null;
@@ -701,6 +731,7 @@ export async function openTodoDialog(opts: {
   if (assigneeSelect) assigneeSelect.disabled = !permissions.canEditAssignment;
   if (estimationSelect) estimationSelect.disabled = !permissions.canChangeEstimation;
   if (todoPriority) (todoPriority as HTMLSelectElement).disabled = !permissions.canChangeEstimation;
+  if (todoDueAt) (todoDueAt as HTMLInputElement).disabled = !permissions.canChangeEstimation;
   const tagInput = document.getElementById("todoTags") as HTMLInputElement | null;
   if (tagInput) tagInput.disabled = !permissions.canEditTags;
   if (addTagBtn) (addTagBtn as HTMLButtonElement).disabled = !permissions.canEditTags;

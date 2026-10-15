@@ -2,7 +2,56 @@
 
 > **Upgrades:** No breaking changes for **3.7.0 ≤ v ≤ 3.38.x** unless noted below. Notable upgrade impact: **3.22.0** (MCP/OAuth), **3.24.0** (MCP tool names), **3.26.0** (MCP project tags), **3.29.0** (MCP JSON-RPC error/`board_get` identity), **3.30.0** (reversible per-project sprint capability), **3.31.0** (per-project priority tiers), **3.33.0** (Agenda ICS feeds need `SCRUMBOY_ENCRYPTION_KEY`), **3.33.12** (webhook destinations must be publicly routable), **3.35.0** (backup format 1.2; Trello closed-card titles) - see those releases.
 
-## [Unreleased]
+## [3.38.6] - 2026-10-15
+
+### Added
+
+- **Todo due dates and "due soon" reminders** - A todo can carry an optional
+  `dueAt` (RFC 3339, UTC). It is settable in the todo dialog, on REST board
+  create/PATCH (`dueAt`; omitted preserves, `null` clears) and through MCP
+  `todos_create` / `todos_update`, appears on every todo payload and on board
+  cards (red once overdue, never for cards in a done column), and survives
+  backup export/import (`dueAt`, omitted when unset). A background scheduler
+  fires **one** reminder per due date when the todo enters its lead window
+  (default **24 hours**, configurable instance-wide with
+  `GET/PUT/DELETE /api/admin/settings/due-reminder`; `0` disables). Changing
+  `dueAt` or reassigning the todo starts a new cycle. Delivery: a `todo.due_soon`
+  webhook event and an email to the assignee (reusing the "Assigned to me"
+  category behind the master opt-in). Done, archived and temporary-board todos
+  never fire, and a due date already in the past when first seen is marked
+  without a notice.
+  Includes migration `077_add_todo_due_at.sql`. See `docs/notifications.md`
+  and `docs/webhooks.md`.
+
+- **Due-soon sorting** - Added **Due soon** to the existing Search todos →
+  Sort menu. Todos are sorted within each workflow column by ascending due
+  date, placing overdue items first, upcoming deadlines next, and undated
+  items last. Sorting uses stable ID tie-breaking and supports paginated
+  loading, existing board filters, and persisted sort preferences. Manual
+  same-column reordering is disabled while this sort is active, but
+  cross-column dragging remains available. REST board queries and MCP
+  `board_get` also support `sort=due`.
+
+- **Overdue indicators** - Overdue board cards display a small red **!**
+  immediately left of the drag handle. Hovering over the indicator on desktop
+  shows the complete due date (e.g. `Fri, Mar 13th 2026`), with an accessible
+  description for assistive technologies. Opening an overdue todo displays
+  **Overdue** in red, centered in the dialog header between the title and
+  updated timestamp. Indicators are suppressed for completed and archived
+  todos, respect custom workflow columns marked as done, and update when
+  the due date or workflow status changes.
+
+### Fixed
+
+- **Due-soon email authorization** - The reminder email re-resolves the todo,
+  project, recipient membership/role, stable user id, and preferences from
+  current state before enqueue and again on every send attempt, instead of
+  trusting the event payload; stale or unauthorized candidates send nothing.
+- **Public-board refresh on private-only todo changes** - Assignee and due-date
+  updates no longer invalidate public-board consumers; only public-projection
+  changes do.
+- **Archived list and merge-import reminders** - The archived-todo list keeps
+  `dueAt`, and merge-import re-arms the reminder when the assignee changes.
 
 ## [3.38.5] - 2026-10-14
 

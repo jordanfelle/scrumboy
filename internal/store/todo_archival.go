@@ -250,7 +250,7 @@ func (s *Store) ListArchivedTodos(ctx context.Context, projectID int64, limit in
 	rows, err := tx.QueryContext(ctx, `
 SELECT id, project_id, local_id, title, body, column_key, rank,
        estimation_points, assignee_user_id, created_by_user_id, sprint_id,
-       priority_key, created_at, updated_at, done_at, archived_at
+       priority_key, created_at, updated_at, done_at, archived_at, due_at
 FROM todos
 WHERE project_id = ? AND archived_at IS NOT NULL`+cursor+`
 ORDER BY archived_at DESC, id DESC
@@ -265,11 +265,11 @@ LIMIT ?`, args...)
 		var estimationPoints, assigneeUserID, createdByUserID, sprintID sql.NullInt64
 		var priorityKey sql.NullString
 		var createdAtMs, updatedAtMs int64
-		var doneAtMs, archivedAtMs sql.NullInt64
+		var doneAtMs, archivedAtMs, dueAtMs sql.NullInt64
 		if err := rows.Scan(
 			&t.ID, &t.ProjectID, &localID, &t.Title, &t.Body, &t.ColumnKey, &t.Rank,
 			&estimationPoints, &assigneeUserID, &createdByUserID, &sprintID,
-			&priorityKey, &createdAtMs, &updatedAtMs, &doneAtMs, &archivedAtMs,
+			&priorityKey, &createdAtMs, &updatedAtMs, &doneAtMs, &archivedAtMs, &dueAtMs,
 		); err != nil {
 			rows.Close()
 			return nil, "", false, err
@@ -307,6 +307,10 @@ LIMIT ?`, args...)
 		}
 		v := time.UnixMilli(archivedAtMs.Int64).UTC()
 		t.ArchivedAt = &v
+		if dueAtMs.Valid {
+			dv := time.UnixMilli(dueAtMs.Int64).UTC()
+			t.DueAt = &dv
+		}
 		out = append(out, t)
 	}
 	if err := rows.Err(); err != nil {

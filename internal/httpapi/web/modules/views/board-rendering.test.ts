@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Board } from '../types.js';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildBoardColumnsHtml, buildFiltersHtml, buildOmniFilterRowHtml, buildTopbarHtml, getBoardColumns, renderTodoCard } from './board-rendering.js';
+import { buildBoardColumnsHtml, buildFiltersHtml, buildOmniFilterRowHtml, buildTopbarHtml, getBoardColumns, renderStoryCardContent, renderTodoCard } from './board-rendering.js';
 import {
   buildBoardColumnsHtml as buildBoardColumnsHtmlDist,
   buildOmniFilterRowHtml as buildOmniFilterRowHtmlDist,
@@ -425,5 +425,67 @@ describe('getBoardColumns workflow isolation', () => {
     };
 
     expect(getBoardColumns(value).map((column) => column.key)).toEqual(['backlog', 'doing', 'done']);
+  });
+});
+
+describe('renderTodoCard due date badge', () => {
+  const past = '2020-01-02T09:00:00Z';
+  const future = '2099-01-02T09:00:00Z';
+  const todo = (over: Record<string, unknown>) => ({
+    id: 1, localId: 1, title: 'Ship it', status: 'DOING', columnKey: 'doing', tags: [], ...over,
+  }) as never;
+  const doneKeys = new Set(['done']);
+
+  beforeAll(async () => {
+    const i18n = await import('../i18n/index.js');
+    await i18n.initI18n({
+      locale: 'en',
+      loadLocale: vi.fn(async () => enCatalog),
+    });
+  });
+
+  it('renders no badge without a due date', () => {
+    expect(renderTodoCard(todo({}), undefined, {}, { doneColumnKeys: doneKeys })).not.toContain('card__due');
+  });
+
+  it('renders a neutral badge for an upcoming due date', () => {
+    const html = renderTodoCard(todo({ dueAt: future }), undefined, {}, { doneColumnKeys: doneKeys });
+    expect(html).toContain('card__due');
+    expect(html).not.toContain('card__due--overdue');
+  });
+
+  it('marks an open card with a past due date as overdue', () => {
+    const html = renderTodoCard(todo({ dueAt: past }), undefined, {}, { doneColumnKeys: doneKeys });
+    expect(html).toContain('card__due card__due--overdue');
+    expect(html).toContain('card__overdue-warning');
+    expect(html).toMatch(/title="[A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}(st|nd|rd|th) \d{4}"/);
+    expect(html).toMatch(/aria-label="Overdue — due [A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}(st|nd|rd|th) \d{4}"/);
+    expect(html.indexOf('card__overdue-warning')).toBeLessThan(html.indexOf('card__drag-handle'));
+  });
+
+  it('never marks a card in a done column as overdue', () => {
+    const html = renderTodoCard(todo({ dueAt: past, status: 'DONE', columnKey: 'done' }), undefined, {}, { doneColumnKeys: doneKeys });
+    expect(html).toContain('card__due');
+    expect(html).not.toContain('card__due--overdue');
+    expect(html).not.toContain('card__overdue-warning');
+  });
+
+  it('does not show the warning for archived cards or shared Wall content', () => {
+    expect(renderTodoCard(todo({ dueAt: past, archivedAt: '2020-01-03T00:00:00Z' }), undefined, {}, { doneColumnKeys: doneKeys }))
+      .not.toContain('card__overdue-warning');
+    expect(renderStoryCardContent(todo({ dueAt: past }), {}, { doneColumnKeys: doneKeys }))
+      .not.toContain('card__overdue-warning');
+  });
+
+  it('ships styles for both badge states', () => {
+    expect(stylesSource).toContain('.card__due {');
+    expect(stylesSource).toContain('.card__due--overdue {');
+    expect(stylesSource).toContain('.card__overdue-warning {');
+  });
+
+  it('pins each todo dialog header item to its grid column at every viewport', () => {
+    expect(stylesSource).toMatch(/#todoDialog \.dialog__title\s*{[^}]*grid-column:\s*1;/s);
+    expect(stylesSource).toMatch(/#todoDialog \.todo-dialog-overdue\s*{[^}]*grid-column:\s*2;/s);
+    expect(stylesSource).toMatch(/#todoDialog \.dialog__header-right\s*{[^}]*grid-column:\s*3;/s);
   });
 });

@@ -38,8 +38,9 @@ func ParseAssigneeFilter(raw string, actorUserID *int64) (AssigneeFilter, error)
 // ParseSortOrder validates the public board sort-order grammar.
 //
 // Empty input keeps the default manual drag-rank order; "newest"/"oldest"
-// order lanes by created_at (with id as a stable tiebreaker). Any other
-// value is rejected.
+// order lanes by created_at, while "due" orders by due_at with undated todos
+// last. All computed orders use id as a stable tiebreaker. Any other value is
+// rejected.
 func ParseSortOrder(raw string) (SortOrder, error) {
 	value := strings.TrimSpace(raw)
 	switch value {
@@ -49,6 +50,8 @@ func ParseSortOrder(raw string) (SortOrder, error) {
 		return SortOrderNewest, nil
 	case string(SortOrderOldest):
 		return SortOrderOldest, nil
+	case string(SortOrderDue):
+		return SortOrderDue, nil
 	default:
 		return "", errInvalidSortOrder
 	}

@@ -151,6 +151,7 @@ describe('board filter panel (assignee + sort)', () => {
       expect(html).toContain('data-sort-option=""');
       expect(html).toContain('data-sort-option="newest"');
       expect(html).toContain('data-sort-option="oldest"');
+      expect(html).toContain('data-sort-option="due"');
     });
 
     it('renders Sprint controls only for Omni boards with sprints enabled', () => {
@@ -204,6 +205,11 @@ describe('board filter panel (assignee + sort)', () => {
       const html = buildFilterPanelHtml('unassigned', 'newest', makeMembers(), { id: 1, name: 'Me', email: 'me@example.com' });
       expect(html).toContain('class="search-filter-option is-active" data-assignee-option="unassigned"');
       expect(html).toContain('class="search-filter-option is-active" data-sort-option="newest"');
+    });
+
+    it('marks Due soon as active when restored from URL state', () => {
+      const html = buildFilterPanelHtml(null, 'due', makeMembers(), null);
+      expect(html).toContain('class="search-filter-option is-active" data-sort-option="due"');
     });
 
     it('marks the toggle as active whenever assignee or sort is non-default', () => {
@@ -448,7 +454,7 @@ describe('board filter panel (assignee + sort)', () => {
       expect(toastMock).not.toHaveBeenCalled();
     });
 
-    it('persists newest, oldest, and default board sort preferences when signed in', async () => {
+    it('persists newest, oldest, due, and default board sort preferences when signed in', async () => {
       const { boardFilters } = await setupState('/alpha');
       const reloadBoard = vi.fn().mockResolvedValue(undefined);
       boardFilters.bindBoardFilterUi({ reloadBoard, showError: vi.fn() });
@@ -468,6 +474,14 @@ describe('board filter panel (assignee + sort)', () => {
       expect(fetch).toHaveBeenCalledWith('/api/user/preferences', expect.objectContaining({
         method: 'PUT',
         body: JSON.stringify({ key: 'boardTodoSort', value: 'oldest' }),
+      }));
+
+      (document.querySelector('[data-sort-option="due"]') as HTMLButtonElement).click();
+      expect(new URL(window.location.href).searchParams.get('sort')).toBe('due');
+      expect(getBoardTodoSortPreference()).toBe('due');
+      expect(fetch).toHaveBeenCalledWith('/api/user/preferences', expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ key: 'boardTodoSort', value: 'due' }),
       }));
 
       toastMock.mockClear();

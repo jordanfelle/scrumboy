@@ -21,6 +21,7 @@ type emailNotifyStore interface {
 	GetEmailNotifyPref(ctx context.Context, userID int64) (store.EmailNotifyPref, error)
 	GetProject(ctx context.Context, projectID int64) (store.Project, error)
 	GetProjectRole(ctx context.Context, projectID int64, userID int64) (store.ProjectRole, error)
+	GetTodoDueReminderState(ctx context.Context, todoID int64) (store.Todo, bool, error)
 	GetUser(ctx context.Context, userID int64) (store.User, error)
 	ListProjectMembers(ctx context.Context, projectID int64, userID int64) ([]store.ProjectMember, error)
 }
@@ -166,6 +167,8 @@ func (n *emailNotifier) OnEvent(ctx context.Context, e eventbus.Event) {
 	case "todo.assigned", "board.refresh_needed", "project.membership":
 		// Never block the fanout / SSE path — same pattern as pushNotifier and the webhook dispatcher.
 		go n.handle(context.WithoutCancel(ctx), e)
+	case eventbus.TodoDueSoonEventType:
+		go n.handleDueSoon(context.WithoutCancel(ctx), e)
 	case eventbus.TodoCreatorNotificationRecipientAuthorizedEventType:
 		// Reauthorize before queueing without blocking fanout. The worker repeats
 		// authorization and performs preference, destination, and rendering checks
@@ -206,6 +209,99 @@ func (n *emailNotifier) handleTodoAssigned(ctx context.Context, e eventbus.Event
 		LocalID: domain.LocalID,
 		Title:   domain.Title,
 	}, excluded)
+}
+
+type dueReminderEmailCandidate struct {
+	projectID         int64
+	todoID            int64
+	localID           int64
+	recipientUserID   int64
+	recipientPublicID string
+	dueAt             time.Time
+}
+
+type dueReminderEmailWork struct {
+	notifier  *emailNotifier
+	candidate dueReminderEmailCandidate
+}
+
+// handleDueSoon emails the assignee that a card is about to come due. It reuses
+// the "assigned" category (cards assigned to me) behind the master opt-in, so no
+// preference schema change is needed. The event only nominates a candidate: all
+// sensitive fields and recipient authorization are resolved from current state
+// before enqueue and again by mailDelivery.Prepare on every send attempt.
+func (n *emailNotifier) handleDueSoon(ctx context.Context, e eventbus.Event) {
+	var domain eventbus.TodoDueSoonPayload
+	if err := json.Unmarshal(e.Payload, &domain); err != nil ||
+		e.ProjectID <= 0 || domain.ProjectID != e.ProjectID || domain.TodoID <= 0 ||
+		domain.LocalID <= 0 || domain.AssigneeUserID == nil || *domain.AssigneeUserID <= 0 ||
+		strings.TrimSpace(domain.AssigneeStableUserID) == "" {
+		return
+	}
+	dueAt, err := time.Parse(time.RFC3339, domain.DueAt)
+	if err != nil {
+		return
+	}
+	work := &dueReminderEmailWork{notifier: n, candidate: dueReminderEmailCandidate{
+		projectID:         domain.ProjectID,
+		todoID:            domain.TodoID,
+		localID:           domain.LocalID,
+		recipientUserID:   *domain.AssigneeUserID,
+		recipientPublicID: domain.AssigneeStableUserID,
+		dueAt:             dueAt,
+	}}
+	delivery, ok, _ := work.prepare(ctx)
+	if !ok {
+		return
+	}
+	delivery.Prepare = work.prepare
+	n.mailQueue.Enqueue(delivery)
+}
+
+func (w *dueReminderEmailWork) prepare(ctx context.Context) (mailDelivery, bool, error) {
+	if w == nil || w.notifier == nil || ctx.Err() != nil {
+		return mailDelivery{}, false, nil
+	}
+	candidate := w.candidate
+	todo, done, err := w.notifier.store.GetTodoDueReminderState(ctx, candidate.todoID)
+	if err != nil || done || todo.ID != candidate.todoID || todo.ProjectID != candidate.projectID ||
+		todo.LocalID != candidate.localID || todo.ArchivedAt != nil || todo.DueAt == nil ||
+		!todo.DueAt.Equal(candidate.dueAt) || todo.AssigneeUserID == nil ||
+		*todo.AssigneeUserID != candidate.recipientUserID {
+		return mailDelivery{}, false, nil
+	}
+	project, err := w.notifier.store.GetProject(ctx, candidate.projectID)
+	if err != nil || project.ID != candidate.projectID || project.ExpiresAt != nil || project.Slug == "" {
+		return mailDelivery{}, false, nil
+	}
+	role, err := w.notifier.store.GetProjectRole(ctx, candidate.projectID, candidate.recipientUserID)
+	if err != nil || !role.HasMinimumRole(store.RoleViewer) {
+		return mailDelivery{}, false, nil
+	}
+	user, err := w.notifier.store.GetUser(ctx, candidate.recipientUserID)
+	if err != nil || user.PublicID != candidate.recipientPublicID || strings.TrimSpace(user.Email) == "" {
+		return mailDelivery{}, false, nil
+	}
+	pref, err := w.notifier.getPref(ctx, candidate.recipientUserID)
+	if err != nil || !pref.Enabled || !pref.Assigned {
+		return mailDelivery{}, false, nil
+	}
+
+	subject := fmt.Sprintf("Due soon: %s", todo.Title)
+	fields := []notificationField{{label: "Due", value: todo.DueAt.UTC().Format("Mon, 02 Jan 2006 15:04 MST")}}
+	ctaLabel, ctaURL := "View project", w.notifier.projectURL(project.Slug)
+	if card, ok := cardIdentity(todo.LocalID, todo.Title); ok {
+		fields = append(fields, notificationField{label: "Card", value: card})
+		ctaLabel, ctaURL = "View card", w.notifier.cardURL(project.Slug, todo.LocalID)
+	}
+	fields = append(fields, notificationField{label: "Project", value: project.Name})
+	body := formatPlainTextNotification(plainTextNotification{
+		heading: "Card due soon", fields: fields, ctaLabel: ctaLabel, ctaURL: ctaURL,
+	})
+	return mailDelivery{
+		To: user.Email, Subject: subject, Body: body,
+		LogRef: fmt.Sprintf("email-notify category=%s user=%d reason=due_soon", emailCategoryAssigned, candidate.recipientUserID),
+	}, true, nil
 }
 
 func (n *emailNotifier) handleAssignment(ctx context.Context, projectID int64, domain eventbus.TodoAssignedPayload) bool {

@@ -67,6 +67,16 @@ describe("todo submit payload helpers", () => {
     }).priorityKey).toBeNull();
   });
 
+  it("sends dueAt only when it is set or cleared", () => {
+    const base = { title: "Title", body: "", tags: [] as string[] };
+    expect("dueAt" in buildTodoPatchPayload({ ...base })).toBe(false);
+    expect("dueAt" in buildTodoCreatePayload({ ...base, columnKey: "backlog", dueAt: undefined })).toBe(false);
+    expect(buildTodoPatchPayload({ ...base, dueAt: "2026-11-01T17:00:00.000Z" }).dueAt).toBe("2026-11-01T17:00:00.000Z");
+    expect(buildTodoPatchPayload({ ...base, dueAt: null }).dueAt).toBeNull();
+    expect(buildTodoCreatePayload({ ...base, columnKey: "backlog", dueAt: "2026-11-01T17:00:00.000Z" }).dueAt)
+      .toBe("2026-11-01T17:00:00.000Z");
+  });
+
   it("submits sprint assignment only when enabled controls change the value", () => {
     expect(shouldSubmitSprintAssignment(false, 8, null)).toBe(false);
     expect(shouldSubmitSprintAssignment(true, null, null)).toBe(false);

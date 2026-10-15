@@ -21,6 +21,9 @@ type emailNotifyFakeStore struct {
 	projectErr   error
 	membersErr   error
 	prefErrs     map[int64]error
+	dueTodo      store.Todo
+	dueDone      bool
+	dueErr       error
 	projectCalls int
 	memberCalls  int
 	userCalls    int
@@ -67,6 +70,15 @@ func (s *emailNotifyFakeStore) GetProjectRole(_ context.Context, _ int64, userID
 	return role, nil
 }
 
+func (s *emailNotifyFakeStore) GetTodoDueReminderState(_ context.Context, _ int64) (store.Todo, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dueErr != nil {
+		return store.Todo{}, false, s.dueErr
+	}
+	return s.dueTodo, s.dueDone, nil
+}
+
 func (s *emailNotifyFakeStore) ListProjectMembers(_ context.Context, _ int64, _ int64) ([]store.ProjectMember, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -96,10 +108,11 @@ func newEmailNotifyFake() *emailNotifyFakeStore {
 			{UserID: 3, Email: "member@example.com"},
 		},
 		users: map[int64]store.User{
-			1: {ID: 1, Email: "actor@example.com"},
-			2: {ID: 2, Email: "assignee@example.com"},
-			3: {ID: 3, Email: "member@example.com"},
+			1: {ID: 1, PublicID: "actor-public", Email: "actor@example.com"},
+			2: {ID: 2, PublicID: "assignee-public", Email: "assignee@example.com"},
+			3: {ID: 3, PublicID: "member-public", Email: "member@example.com"},
 		},
+		dueTodo:  store.Todo{ID: 11, ProjectID: 7, LocalID: 4, Title: "Ship it", ColumnKey: store.DefaultColumnDoing, AssigneeUserID: func() *int64 { value := int64(2); return &value }()},
 		prefs:    map[int64]store.EmailNotifyPref{1: pref, 2: pref, 3: pref},
 		prefErrs: make(map[int64]error),
 		roles:    map[int64]store.ProjectRole{1: store.RoleViewer, 2: store.RoleViewer, 3: store.RoleViewer},

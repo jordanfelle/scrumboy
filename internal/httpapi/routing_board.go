@@ -633,15 +633,16 @@ func (s *Server) handleBoardTodoRoutes(w http.ResponseWriter, r *http.Request, r
 	// POST /api/board/{slug}/todos
 	if len(rest) == 2 && rest[1] == "todos" && r.Method == http.MethodPost {
 		var in struct {
-			Title            string   `json:"title"`
-			Body             string   `json:"body"`
-			Tags             []string `json:"tags"`
-			ColumnKey        string   `json:"columnKey"`
-			Status           string   `json:"status"`
-			EstimationPoints *int64   `json:"estimationPoints"`
-			SprintID         *int64   `json:"sprintId"`
-			AssigneeUserID   *int64   `json:"assigneeUserId"`
-			PriorityKey      *string  `json:"priorityKey"`
+			Title            string     `json:"title"`
+			Body             string     `json:"body"`
+			Tags             []string   `json:"tags"`
+			ColumnKey        string     `json:"columnKey"`
+			Status           string     `json:"status"`
+			EstimationPoints *int64     `json:"estimationPoints"`
+			SprintID         *int64     `json:"sprintId"`
+			AssigneeUserID   *int64     `json:"assigneeUserId"`
+			PriorityKey      *string    `json:"priorityKey"`
+			DueAt            *time.Time `json:"dueAt"`
 			Position         *struct {
 				AfterID  *int64 `json:"afterId"`
 				BeforeID *int64 `json:"beforeId"`
@@ -679,6 +680,7 @@ func (s *Server) handleBoardTodoRoutes(w http.ResponseWriter, r *http.Request, r
 				AssigneeUserID:   in.AssigneeUserID,
 				SprintID:         in.SprintID,
 				PriorityKey:      in.PriorityKey,
+				DueAt:            in.DueAt,
 			},
 			Position: position,
 		})
@@ -963,13 +965,14 @@ func (s *Server) handleBoardTodoItemRoutes(w http.ResponseWriter, r *http.Reques
 			}
 
 			var in struct {
-				Title            string   `json:"title"`
-				Body             string   `json:"body"`
-				Tags             []string `json:"tags"`
-				EstimationPoints *int64   `json:"estimationPoints"`
-				AssigneeUserID   *int64   `json:"assigneeUserId"`
-				SprintID         *int64   `json:"sprintId"`
-				PriorityKey      *string  `json:"priorityKey"`
+				Title            string     `json:"title"`
+				Body             string     `json:"body"`
+				Tags             []string   `json:"tags"`
+				EstimationPoints *int64     `json:"estimationPoints"`
+				AssigneeUserID   *int64     `json:"assigneeUserId"`
+				SprintID         *int64     `json:"sprintId"`
+				PriorityKey      *string    `json:"priorityKey"`
+				DueAt            *time.Time `json:"dueAt"`
 			}
 			payload, err := json.Marshal(raw)
 			if err != nil {
@@ -992,6 +995,9 @@ func (s *Server) handleBoardTodoItemRoutes(w http.ResponseWriter, r *http.Reques
 			}
 			if _, hasPriorityKey := raw["priorityKey"]; hasPriorityKey {
 				patch.PriorityKey = todoapp.Field[*string]{Present: true, Value: in.PriorityKey}
+			}
+			if _, hasDueAt := raw["dueAt"]; hasDueAt {
+				patch.DueAt = todoapp.Field[*time.Time]{Present: true, Value: in.DueAt}
 			}
 			prepared := s.todoUpdates.Prepare(s.requestContext(r), todoapp.ResolvedUpdateTarget{
 				ProjectContext: *pc,

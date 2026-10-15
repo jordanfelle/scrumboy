@@ -46,7 +46,7 @@ toggle:
 
 | Category           | Fires on                                                                                   | Default |
 | ------------------ | -------------------------------------------------------------------------------------------- | ------- |
-| Assigned to me      | A card is assigned to you (mirrors the existing Web Push assignment notification)             | on      |
+| Assigned to me      | A card is assigned to you (mirrors the existing Web Push assignment notification), or a card assigned to you is about to come due (see [Due-soon reminders](#due-soon-reminders)) | on      |
 | Cards I opened      | A card whose historical creator is you is materially updated or moved while you still have access | off     |
 | Card activity        | A card is created, updated, moved, deleted, or its links change                              | off     |
 | Sprint activity       | A sprint is created, updated, deleted, activated, or closed                                   | off     |
@@ -232,6 +232,33 @@ This is a **seed at creation time only**, not a live-applied policy:
 > keep working (the app's seed upsert overwrites its row when an override is configured), but a
 > **positional** trigger (`INSERT INTO user_preferences VALUES (...)`) becomes structurally invalid
 > once the `provenance` column is added and must be removed.
+
+## Due-soon reminders
+
+A todo can have a due date (`dueAt`). When it comes within the configured **lead time** (default
+24 hours), Scrumboy sends one reminder for that due date:
+
+- **Email** to the assignee, if they have the master toggle **and** the *Assigned to me* category
+  on. Unassigned cards have no recipient. There is no separate category: reminders for cards
+  assigned to you ride on the existing one.
+- A `todo.due_soon` **webhook** event for the project (see `docs/webhooks.md`).
+
+The lead time is instance-wide: an admin or owner reads and sets it with
+`GET`/`PUT`/`DELETE /api/admin/settings/due-reminder` (body `{"leadHours": 48}`; `0` turns
+reminders off; maximum 2160, i.e. 90 days; `DELETE` returns to the 24-hour default). A scheduler
+checks every minute. Rules:
+
+- Once per due date: changing `dueAt` starts a new cycle, re-saving the same value does not.
+- Cards in a done column, archived cards, and cards on temporary boards are skipped.
+- A due date already in the past when the scheduler first sees it is marked silently, so setting a
+  past date (or importing a backup full of them) never produces a burst of "overdue" email.
+- Delivery is at most once. A reminder that falls inside a server outage is not replayed.
+- Times in the email are UTC.
+- Raising the lead time takes effect immediately: every open card due within the new window that
+  was not yet reminded is notified on the next tick, so a large increase (for example 24 to 720
+  hours) sends one burst. Lowering it never un-sends anything.
+- Reassigning a card re-arms its reminder for the new assignee (the earlier one went to the
+  previous assignee, or to nobody if the card was unassigned when the window opened).
 
 ## Delivery isolation
 

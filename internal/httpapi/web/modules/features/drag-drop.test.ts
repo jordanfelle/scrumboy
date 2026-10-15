@@ -197,7 +197,7 @@ describe("drag-drop", () => {
     expectMove(22, "doing", 21, 23);
   });
 
-  it.each(["newest", "oldest"] as const)(
+  it.each(["newest", "oldest", "due"] as const)(
     "keeps connected cross-lane dragging enabled with in-lane sorting disabled for %s ordering",
     async (sort) => {
       selectorState.sort = sort;

@@ -112,12 +112,14 @@ New exports explicitly include:
 - Project `priorityTiers` — `[]` means the canonical/default priority tiers
 - Todo `priorityKey` — `null` means no priority assigned
 - Todo `archivedAt` — a Unix-millisecond timestamp for archived stories, or explicit `null` for active stories
+- Todo `dueAt` — a Unix-millisecond due date, **omitted** when the story has none (so exports that use no due dates are unchanged); an importing server that predates due dates rejects the unknown field. `dueAt` must be after the epoch and before year 2100
 
 During **matched-project merge**:
 
 - **Absent** legacy priority fields preserve the target project’s existing tier definitions or todo assignments
 - An explicit todo `priorityKey` of `null` **clears** that todo’s assignment
 - An absent `archivedAt` preserves the target story’s archive state; explicit `null` clears it, and a timestamp sets it
+- An absent `dueAt` preserves the target story’s due date; a value replaces it and starts a new reminder cycle (there is no explicit-`null` clear on merge)
 - Explicit `priorityTiers` arrays replace definitions; a string `priorityKey` assigns against the effective project tier set
 
 Outside matched-project merge — **Create copy**, **Replace**, import into an existing

@@ -2,6 +2,7 @@ package todo
 
 import (
 	"context"
+	"time"
 
 	"scrumboy/internal/store"
 )
@@ -30,6 +31,8 @@ type UpdatePatch struct {
 	AssigneeUserID   Field[*int64]
 	SprintID         Field[*int64]
 	PriorityKey      Field[*string]
+	// DueAt: present with a nil value clears the due date.
+	DueAt Field[*time.Time]
 }
 
 // HasFields reports syntactic patch presence. It intentionally does not
@@ -43,7 +46,8 @@ func (p UpdatePatch) HasFields() bool {
 		p.EstimationPoints.Present ||
 		p.AssigneeUserID.Present ||
 		p.SprintID.Present ||
-		p.PriorityKey.Present
+		p.PriorityKey.Present ||
+		p.DueAt.Present
 }
 
 // UpdateCommand identifies a todo by its project-local ID and carries its
@@ -107,6 +111,11 @@ func MaterializeUpdateInput(existing store.Todo, patch UpdatePatch) store.Update
 		priorityKey = cloneUpdateStringPtr(patch.PriorityKey.Value)
 	}
 
+	dueAt := cloneUpdateTimePtr(existing.DueAt)
+	if patch.DueAt.Present {
+		dueAt = cloneUpdateTimePtr(patch.DueAt.Value)
+	}
+
 	var sprintID *int64
 	clearSprint := false
 	if patch.SprintID.Present {
@@ -139,6 +148,8 @@ func MaterializeUpdateInput(existing store.Todo, patch UpdatePatch) store.Update
 		KeepTags:             !patch.Tags.Present,
 		KeepEstimationPoints: !patch.EstimationPoints.Present,
 		KeepAssigneeUserID:   !patch.AssigneeUserID.Present,
+		DueAt:                dueAt,
+		DueAtPresent:         patch.DueAt.Present,
 	}
 }
 
@@ -152,6 +163,14 @@ func cloneUpdateStrings(values []string) []string {
 }
 
 func cloneUpdateInt64Ptr(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneUpdateTimePtr(value *time.Time) *time.Time {
 	if value == nil {
 		return nil
 	}

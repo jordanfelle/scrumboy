@@ -24,6 +24,8 @@ function installTodoDom(): HTMLInputElement {
         <select id="todoAssignee"></select>
         <select id="todoSprint"></select>
         <select id="todoEstimationPoints"></select>
+        <input id="todoDueAt" type="datetime-local" />
+        <div id="todoDialogOverdue" hidden>Overdue</div>
         <div id="todoEstimationField"></div>
         <div id="todoAssigneeField"></div>
         <div id="todoSprintField"></div>
@@ -48,6 +50,7 @@ describe("openTodoDialog initialTitle seeding", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     document.body.innerHTML = "";
     vi.restoreAllMocks();
   });
@@ -190,6 +193,81 @@ describe("openTodoDialog initialTitle seeding", () => {
     await openTodoDialog({ mode: "create", role: "maintainer" });
 
     expect(input.value).toBe("");
+  });
+
+  it("updates and resets the overdue header across status, due-date, archived, and create states", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 2, 13, 12, 0, 15, 250));
+    installTodoDom();
+    (document.getElementById("todoDialog") as HTMLDialogElement).showModal = vi.fn();
+
+    vi.doMock("../api.js", () => ({ apiFetch: vi.fn().mockResolvedValue([]) }));
+    vi.doMock("../state/selectors.js", () => ({
+      getBoard: () => ({ columnOrder: [
+        { key: "doing", name: "Doing", isDone: false },
+        { key: "complete", name: "Complete", isDone: true },
+      ] }),
+      getBoardMembers: () => [],
+      getMarkdownNotesEnabled: () => false,
+      getMermaidNotesEnabled: () => false,
+      getSlug: () => "",
+      getTagColors: () => ({}),
+      getUser: () => null,
+    }));
+    vi.doMock("../state/mutations.js", () => ({
+      setAvailableTags: vi.fn(), setAvailableTagsMap: vi.fn(), setEditingTodo: vi.fn(), setTagColors: vi.fn(),
+    }));
+    vi.doMock("../utils.js", () => ({
+      escapeHTML: (s: string) => s, isAnonymousBoard: () => true, showToast: vi.fn(),
+    }));
+    vi.doMock("../sprints.js", () => ({ normalizeSprints: () => [], boardSprintsEnabled: () => true }));
+    vi.doMock("./todo-links.js", () => ({
+      bindShareTodoButton: vi.fn(), bindTodoDialogLinkLifecycle: vi.fn(), initializeTodoDialogLinks: vi.fn(), resetTodoDialogLinks: vi.fn(),
+    }));
+    vi.doMock("./todo-permissions.js", () => ({
+      computeTodoDialogPermissions: () => ({
+        canSubmitTodo: true, canDeleteTodo: false, canEditAssignment: true,
+        canChangeEstimation: true, canEditTags: true, canEditNotes: true,
+        canEditTitle: true, canEditStatus: true,
+      }),
+      setTodoFormPermissions: vi.fn(),
+    }));
+    vi.doMock("./todo-tags.js", () => ({
+      getTagsFromChips: () => [], renderTagsChips: vi.fn(), resetTodoTagAutocompleteBindings: vi.fn(), setupTagAutocomplete: vi.fn(),
+    }));
+
+    const i18n = await import("../i18n/index.js");
+    await i18n.initI18n({ locale: "en", loadLocale: async () => enCatalog });
+    const { openTodoDialog } = await import("./todo.js");
+    const indicator = document.getElementById("todoDialogOverdue") as HTMLElement;
+    const status = document.getElementById("todoStatus") as HTMLSelectElement;
+    const due = document.getElementById("todoDueAt") as HTMLInputElement;
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const futureLocal = new Date(Date.now() + 60_000);
+    const localValue = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}T${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+
+    await openTodoDialog({ mode: "edit", todo: { title: "Late", status: "doing", columnKey: "doing", dueAt: past, tags: [] }, role: "maintainer" });
+    expect(indicator.hidden).toBe(false);
+
+    status.value = "complete";
+    status.dispatchEvent(new Event("change"));
+    expect(indicator.hidden).toBe(true);
+    status.value = "doing";
+    status.dispatchEvent(new Event("change"));
+    expect(indicator.hidden).toBe(false);
+
+    const preciseFuture = new Date(Date.now() + 30_000).toISOString();
+    await openTodoDialog({ mode: "edit", todo: { title: "Soon", status: "doing", columnKey: "doing", dueAt: preciseFuture, tags: [] }, role: "maintainer" });
+    expect(indicator.hidden).toBe(true);
+
+    due.value = localValue(futureLocal);
+    due.dispatchEvent(new Event("input"));
+    expect(indicator.hidden).toBe(true);
+
+    await openTodoDialog({ mode: "edit", todo: { title: "Archived", status: "doing", columnKey: "doing", dueAt: past, archivedAt: past, tags: [] }, role: "maintainer" });
+    expect(indicator.hidden).toBe(true);
+    await openTodoDialog({ mode: "create", status: "doing", role: "maintainer" });
+    expect(indicator.hidden).toBe(true);
   });
 
   it("renders unknown sprint states as raw text in the sprint select", async () => {

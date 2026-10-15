@@ -41,6 +41,8 @@ export interface Todo {
   updatedAt?: string;
   doneAt?: string;
   archivedAt?: string;
+  /** Optional deadline, RFC 3339 UTC. */
+  dueAt?: string | null;
 }
 
 export interface PriorityTier {

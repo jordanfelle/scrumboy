@@ -3,6 +3,7 @@ package todo
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"scrumboy/internal/store"
 )
@@ -325,5 +326,46 @@ func TestMaterializeUpdateInputBodyAppend(t *testing.T) {
 	}
 	if !(UpdatePatch{BodyAppend: app}).HasFields() {
 		t.Fatal("BodyAppend must count as a present field")
+	}
+}
+
+func TestMaterializeUpdateInput_DueAt(t *testing.T) {
+	existingDue := time.Date(2026, 11, 1, 17, 0, 0, 0, time.UTC)
+	existing := store.Todo{Title: "t", DueAt: &existingDue}
+
+	// Omitted: preserved, and not marked present so the store leaves it alone.
+	in := MaterializeUpdateInput(existing, UpdatePatch{Title: Field[string]{Present: true, Value: "x"}})
+	if in.DueAtPresent {
+		t.Fatal("omitted dueAt must not be marked present")
+	}
+
+	// Present nil: clear.
+	in = MaterializeUpdateInput(existing, UpdatePatch{DueAt: Field[*time.Time]{Present: true}})
+	if !in.DueAtPresent || in.DueAt != nil {
+		t.Fatalf("clear: present=%v value=%v", in.DueAtPresent, in.DueAt)
+	}
+
+	// Present value: set, and the input is a copy, not an alias.
+	next := time.Date(2026, 12, 1, 9, 0, 0, 0, time.UTC)
+	in = MaterializeUpdateInput(existing, UpdatePatch{DueAt: Field[*time.Time]{Present: true, Value: &next}})
+	if !in.DueAtPresent || in.DueAt == nil || !in.DueAt.Equal(next) {
+		t.Fatalf("set: present=%v value=%v", in.DueAtPresent, in.DueAt)
+	}
+	if in.DueAt == &next {
+		t.Fatal("materialized DueAt aliases the patch value")
+	}
+}
+
+func TestUpdatePatchHasFields_DueAtAlone(t *testing.T) {
+	if !(UpdatePatch{DueAt: Field[*time.Time]{Present: true}}).HasFields() {
+		t.Fatal("dueAt-only patch must report present fields")
+	}
+}
+
+func TestMaterializeCreateInput_DueAtIsCopied(t *testing.T) {
+	due := time.Date(2026, 11, 1, 17, 0, 0, 0, time.UTC)
+	in := MaterializeCreateInput(CreateCommand{Values: CreateValues{Title: "t", DueAt: &due}})
+	if in.DueAt == nil || !in.DueAt.Equal(due) || in.DueAt == &due {
+		t.Fatalf("DueAt = %v (aliased=%v)", in.DueAt, in.DueAt == &due)
 	}
 }

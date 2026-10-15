@@ -39,14 +39,21 @@ func TestTodoMCPBodyAppendAndBrief(t *testing.T) {
 		return got.Body
 	}
 
-	got := call("todos_update", map[string]any{"patch": map[string]any{"bodyAppend": "MR: !1"}})
+	dueAt := "2026-11-01T17:00:00Z"
+	got := call("todos_update", map[string]any{"patch": map[string]any{"bodyAppend": "MR: !1", "dueAt": dueAt}})
 	if want := "original\n\nMR: !1"; got["body"] != want || storedBody() != want {
 		t.Fatalf("append: response=%v stored=%q want=%q", got["body"], storedBody(), want)
+	}
+	if got["dueAt"] != dueAt {
+		t.Fatalf("bodyAppend+dueAt response=%+v", got)
 	}
 
 	got = call("todos_update", map[string]any{"brief": true, "patch": map[string]any{"bodyAppend": "MR: !2"}})
 	if _, has := got["body"]; has {
 		t.Fatalf("brief update returned body: %+v", got)
+	}
+	if got["dueAt"] != dueAt {
+		t.Fatalf("brief update lost dueAt: %+v", got)
 	}
 	if want := "original\n\nMR: !1\n\nMR: !2"; storedBody() != want {
 		t.Fatalf("second append stored=%q want=%q", storedBody(), want)
@@ -58,7 +65,7 @@ func TestTodoMCPBodyAppendAndBrief(t *testing.T) {
 	}
 
 	got = call("todos_get", map[string]any{"brief": true})
-	if _, has := got["body"]; has || got["title"] != "t" {
+	if _, has := got["body"]; has || got["title"] != "t" || got["dueAt"] != dueAt {
 		t.Fatalf("brief get=%+v", got)
 	}
 	got = call("todos_get", map[string]any{})
@@ -67,7 +74,7 @@ func TestTodoMCPBodyAppendAndBrief(t *testing.T) {
 	}
 
 	got = call("todos_move", map[string]any{"brief": true, "toColumnKey": "doing"})
-	if _, has := got["body"]; has || got["columnKey"] != "doing" {
+	if _, has := got["body"]; has || got["columnKey"] != "doing" || got["dueAt"] != dueAt {
 		t.Fatalf("brief move=%+v", got)
 	}
 

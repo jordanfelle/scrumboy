@@ -6,7 +6,11 @@ import (
 )
 
 func todoRefreshEntity(todo store.Todo) refresh.Entity {
-	return refresh.Entity{LocalID: todo.LocalID, Title: todo.Title}
+	return refresh.Entity{
+		LocalID:                 todo.LocalID,
+		Title:                   todo.Title,
+		PublicProjectionChanged: todo.PublicProjectionChanged,
+	}
 }
 
 func todoMoveRefreshEntity(todo store.Todo) refresh.Entity {

@@ -558,6 +558,42 @@ func TestPublicSSEPhase3PrivateMutationsEmitNoPublicInvalidation(t *testing.T) {
 	stream.expectLine(t, publicSSERefreshLine)
 }
 
+func TestPublicSSEPhase3DueDateRefreshClassification(t *testing.T) {
+	f := newPublicSSEFixture(t)
+	slug := f.project.Slug
+	localID := f.createTodo(t, slug, "Projection card")
+	publicStream, _ := openPublicSSE(t, f.ts.Client(), f.eventsURL(slug), nil)
+	if publicStream.resp.StatusCode != http.StatusOK {
+		t.Fatalf("public status=%d", publicStream.resp.StatusCode)
+	}
+	probe := f.probe(t, f.project.ID)
+
+	privateStream := subscribeTodoUpdateEvents(t, f.ownerClient, f.ts.URL+"/api/board/"+slug+"/events")
+	due := time.Now().UTC().Add(48 * time.Hour).Truncate(time.Second)
+	f.ownerJSON(t, http.MethodPatch, fmt.Sprintf("/api/board/%s/todos/%d", slug, localID), map[string]any{
+		"title": "Projection card", "body": "body", "tags": []string{}, "assigneeUserId": nil,
+		"dueAt": due.Format(time.RFC3339),
+	}, http.StatusOK)
+	privateEvents := collectTodoUpdateEvents(t, privateStream)
+	if len(privateEvents) != 1 || privateEvents[0].Type != "refresh_needed" || privateEvents[0].Reason != "todo_updated" {
+		t.Fatalf("private due-date refresh events = %+v", privateEvents)
+	}
+	expectProbeEvents(t, probe, 0)
+
+	privateStream = subscribeTodoUpdateEvents(t, f.ownerClient, f.ts.URL+"/api/board/"+slug+"/events")
+	changedDue := due.Add(24 * time.Hour)
+	f.ownerJSON(t, http.MethodPatch, fmt.Sprintf("/api/board/%s/todos/%d", slug, localID), map[string]any{
+		"title": "Projection card updated", "body": "body", "tags": []string{}, "assigneeUserId": nil,
+		"dueAt": changedDue.Format(time.RFC3339),
+	}, http.StatusOK)
+	privateEvents = collectTodoUpdateEvents(t, privateStream)
+	if len(privateEvents) != 1 || privateEvents[0].Type != "refresh_needed" || privateEvents[0].Reason != "todo_updated" {
+		t.Fatalf("private combined refresh events = %+v", privateEvents)
+	}
+	expectProbeEvents(t, probe, 1)
+	publicStream.expectLine(t, publicSSERefreshLine)
+}
+
 func TestPublicSSEPhase3AssignmentWithContentChangeEmitsOnce(t *testing.T) {
 	f := newPublicSSEFixture(t)
 	slug := f.project.Slug

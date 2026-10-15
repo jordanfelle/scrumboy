@@ -6,7 +6,7 @@
 // - dist/**/*.js is emitted runtime/build output, not the primary editing target.
 // - source-side modules/**/*.js mirrors are unsupported and should not exist or be recreated.
 
-import { app, toast, todoDialog, todoForm, todoDialogTitle, todoTitle, todoBody, todoTags, todoStatus, todoEstimationPoints, todoPriority, archiveTodoBtn, restoreTodoBtn, deleteTodoBtn, closeTodoBtn, settingsDialog, closeSettingsBtn } from './dist/dom/elements.js';
+import { app, toast, todoDialog, todoForm, todoDialogTitle, todoTitle, todoBody, todoTags, todoStatus, todoEstimationPoints, todoPriority, todoDueAt, archiveTodoBtn, restoreTodoBtn, deleteTodoBtn, closeTodoBtn, settingsDialog, closeSettingsBtn } from './dist/dom/elements.js';
 import { initTheme, handleThemeChange, getStoredTheme, THEME_SYSTEM, THEME_DARK, THEME_LIGHT } from './dist/theme.js';
 import { escapeHTML, showToast, showConfirmDialog } from './dist/utils.js';
 import { apiFetch, archiveTodos, restoreTodos } from './dist/api.js';
@@ -15,6 +15,7 @@ import { getRoute, getProjectId, getBoard, getAuthStatusAvailable, getMobileTab,
 import { setProjectId, setBoard, setSlug, setMobileTab, setProjects, setProjectsTab, setProjectView, setEditingTodo, setAvailableTags, setAvailableTagsMap, setAutocompleteSuggestion, setTagColors, setSettingsProjectId, setSettingsActiveTab, setBackupImportBtn, setBackupData, setBackupPreview } from './dist/state/mutations.js';
 import { openTodoDialog, renderTagsChips, setupTagAutocomplete, removeTag, renderTagAutocomplete, getTagsFromChips, resetAssigneeSelect, getTodoFormPermissions, requestTodoDialogClose, getTodoDialogOpenGeneration, notifyTodoCreated } from './dist/dialogs/todo.js';
 import { buildTodoCreatePayload, buildTodoPatchPayload, shouldSubmitSprintAssignment } from './dist/dialogs/todo-submit.js';
+import { hasIncompleteDueInput, resolveDueAtForSubmit } from './dist/dialogs/todo-due.js';
 import { renderSettingsModal, invalidateTagsCache, resumeAuthenticationMethodFlow } from './dist/dialogs/settings.js';
 import { initDnD, columnsSpec, dragInProgress, dragJustEnded } from './dist/features/drag-drop.js';
 import { setupContextMenuCloseHandler } from './dist/features/context-menu.js';
@@ -218,6 +219,13 @@ todoForm.addEventListener("submit", async (e) => {
   const columnKey = todoStatus.value;
   const estimationRaw = todoEstimationPoints?.value ?? "";
   const priorityKey = todoPriority?.value ?? "";
+  const dueAtValue = todoDueAt?.value ?? "";
+  // A half-edited datetime-local reports value "" with badInput set; treating that as
+  // "cleared" would silently delete the due date, so make the user finish or clear it.
+  if (hasIncompleteDueInput(todoDueAt)) {
+    todoDueAt.reportValidity?.();
+    return;
+  }
 
   const sprintEl = document.getElementById("todoSprint");
   const sprintField = document.getElementById("todoSprintField");
@@ -244,6 +252,7 @@ todoForm.addEventListener("submit", async (e) => {
         sprintEnabled: shouldSubmitSprintAssignment(!!showSprint, todo.sprintId, sprintId),
         sprintId,
 		priorityKey,
+        dueAt: resolveDueAtForSubmit("edit", dueAtValue, todo.dueAt),
       });
       recordLocalMutation();
       await apiFetch(`/api/board/${getSlug()}/todos/${todo.localId}`, {
@@ -275,6 +284,7 @@ todoForm.addEventListener("submit", async (e) => {
         assigneeEnabled: !!assigneeEl,
         assigneeUserId,
 		priorityKey,
+        dueAt: resolveDueAtForSubmit("create", dueAtValue, null),
       });
       recordLocalMutation();
       const createdTodo = await apiFetch(`/api/board/${getSlug()}/todos`, {

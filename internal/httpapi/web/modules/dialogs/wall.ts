@@ -128,7 +128,7 @@ import {
   toggleWallCanvasMode,
   type WallCanvasMode,
 } from "./wall-canvas-mode.js";
-import { buildPriorityTierMap } from "../views/board-rendering.js";
+import { buildDoneColumnKeys, buildPriorityTierMap } from "../views/board-rendering.js";
 
 export interface OpenWallDialogOptions {
   projectId: number;
@@ -589,6 +589,7 @@ function wallCardRenderContext() {
       tagColors: getTagColors(),
       showPointsMode: board?.project?.estimationMode == null || board.project.estimationMode === "MODIFIED_FIBONACCI",
       priorityTiers: board ? buildPriorityTierMap(board) : undefined,
+      doneColumnKeys: board ? buildDoneColumnKeys(board) : undefined,
     },
   };
 }

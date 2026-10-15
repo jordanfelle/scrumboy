@@ -424,8 +424,9 @@ grammar and a real tier key such as `"none"` remains filterable. An unknown tier
 key returns an empty board.
 
 `board_get` also accepts an optional string `sort`: `"newest"` or `"oldest"`
-orders items within each lane by creation time with a stable ID tie-break.
-Omit `sort` to preserve manual drag-rank order.
+orders items within each lane by creation time, while `"due"` orders dated items
+chronologically and places undated items last. Every computed order uses a
+stable ID tie-break. Omit `sort` to preserve manual drag-rank order.
 
 The optional `sprintId` filter is the stored sprint row ID returned as
 `sprintId` by `sprints_list`. It is not the project-local `number` in the same
@@ -644,7 +645,7 @@ updated first, with project ID descending as the deterministic tie-breaker.
 
 (`todoItem` in `internal/mcp/types.go`; default column when omitted is `store.DefaultColumnBacklog` = **`backlog`** after `normalizeColumnKey` in `internal/mcp/adapter.go`.) Every field above is always present in MCP todo responses; optional values are explicit JSON `null` rather than omitted. **`archivedAt`** is an RFC3339 timestamp string when the story is archived and `null` when it is active.
 
-**3. `todos_update`** — required: `projectSlug`, `localId`, `patch` (object). Only fields present in `patch` are updated; some fields may be set to JSON `null` to clear where the store allows it. For `priorityKey`, omission preserves, `null` clears, and a string assigns a tier from the same project. Success data uses the same `todo` object shape as `todos_create` / `todos_get`.
+**3. `todos_update`** — required: `projectSlug`, `localId`, `patch` (object). Only fields present in `patch` are updated; some fields may be set to JSON `null` to clear where the store allows it. For `priorityKey`, omission preserves, `null` clears, and a string assigns a tier from the same project. For `dueAt`, omission preserves, `null` clears, and an RFC 3339 timestamp sets the due date. Success data uses the same `todo` object shape as `todos_create` / `todos_get`.
 
 ## Examples
 
