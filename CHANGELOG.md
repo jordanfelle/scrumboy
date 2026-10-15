@@ -2,7 +2,7 @@
 
 > **Upgrades:** No breaking changes for **3.7.0 ≤ v ≤ 3.38.x** unless noted below. Notable upgrade impact: **3.22.0** (MCP/OAuth), **3.24.0** (MCP tool names), **3.26.0** (MCP project tags), **3.29.0** (MCP JSON-RPC error/`board_get` identity), **3.30.0** (reversible per-project sprint capability), **3.31.0** (per-project priority tiers), **3.33.0** (Agenda ICS feeds need `SCRUMBOY_ENCRYPTION_KEY`), **3.33.12** (webhook destinations must be publicly routable), **3.35.0** (backup format 1.2; Trello closed-card titles) - see those releases.
 
-## [Unreleased]
+## [3.38.6] - 2026-10-15
 
 ### Added
 
@@ -15,12 +15,25 @@
   fires **one** reminder per due date when the todo enters its lead window
   (default **24 hours**, configurable instance-wide with
   `GET/PUT/DELETE /api/admin/settings/due-reminder`; `0` disables). Changing
-  `dueAt` starts a new cycle. Delivery: a `todo.due_soon` webhook event and an
-  email to the assignee (reusing the "Assigned to me" category behind the
-  master opt-in). Done, archived and temporary-board todos never fire, and a
-  due date already in the past when first seen is marked without a notice.
+  `dueAt` or reassigning the todo starts a new cycle. Delivery: a `todo.due_soon`
+  webhook event and an email to the assignee (reusing the "Assigned to me"
+  category behind the master opt-in). Done, archived and temporary-board todos
+  never fire, and a due date already in the past when first seen is marked
+  without a notice.
   Includes migration `077_add_todo_due_at.sql`. See `docs/notifications.md`
   and `docs/webhooks.md`.
+
+### Fixed
+
+- **Due-soon email authorization** - The reminder email re-resolves the todo,
+  project, recipient membership/role, stable user id, and preferences from
+  current state before enqueue and again on every send attempt, instead of
+  trusting the event payload; stale or unauthorized candidates send nothing.
+- **Public-board refresh on private-only todo changes** - Assignee and due-date
+  updates no longer invalidate public-board consumers; only public-projection
+  changes do.
+- **Archived list and merge-import reminders** - The archived-todo list keeps
+  `dueAt`, and merge-import re-arms the reminder when the assignee changes.
 
 ## [3.38.5] - 2026-10-14
 
