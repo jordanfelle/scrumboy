@@ -102,6 +102,7 @@ type todoItemBrief struct {
 	UpdatedAt        time.Time  `json:"updatedAt"`
 	DoneAt           *time.Time `json:"doneAt"`
 	ArchivedAt       *time.Time `json:"archivedAt"`
+	DueAt            *time.Time `json:"dueAt"`
 }
 
 type todoSearchItem struct {

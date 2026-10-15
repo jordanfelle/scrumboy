@@ -333,6 +333,10 @@ type Todo struct {
 	// MaterialChanged is transaction-authoritative mutation metadata. It ignores
 	// bookkeeping timestamps and is not persisted or projected to clients.
 	MaterialChanged bool `json:"-"`
+	// PublicProjectionChanged is transaction-authoritative mutation metadata for
+	// deciding whether public-board consumers need an invalidation. Private-only
+	// fields such as assignee and due date do not set it.
+	PublicProjectionChanged bool `json:"-"`
 	// MoveFromColumnName and MoveToColumnName are transient mutation metadata.
 	// MoveTodo populates them from the workflow columns it already validates in
 	// the authoritative transaction; they are never persisted or projected.

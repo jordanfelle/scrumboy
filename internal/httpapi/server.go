@@ -386,6 +386,7 @@ type storeAPI interface {
 	GetProjectIDForTodo(ctx context.Context, todoID int64) (int64, error)
 	MoveTodo(ctx context.Context, todoID int64, toColumnKey string, afterID, beforeID *int64, mode store.Mode) (store.Todo, error)
 	GetTodoByLocalID(ctx context.Context, projectID, localID int64, mode store.Mode) (store.Todo, error)
+	GetTodoDueReminderState(ctx context.Context, todoID int64) (store.Todo, bool, error)
 	ArchiveTodoByLocalID(ctx context.Context, projectID, localID int64, mode store.Mode) (store.TodoArchiveBatchResult, error)
 	RestoreTodoByLocalID(ctx context.Context, projectID, localID int64, mode store.Mode) (store.TodoArchiveBatchResult, error)
 	ArchiveTodosByLocalID(ctx context.Context, projectID int64, localIDs []int64, mode store.Mode) (store.TodoArchiveBatchResult, error)
@@ -785,10 +786,15 @@ func NewServer(st storeAPI, opts Options) *Server {
 		Claims:    st,
 		Publisher: projectClaimPublisher{server: server},
 	})
-	// Every todo-service refresh reason (create, non-assignment update, move,
-	// archive, restore, delete) changes the allowlisted public projection.
+	// Todo updates carry a transaction-authoritative public-projection marker so
+	// private-only due-date changes do not invalidate public boards. Other todo
+	// refresh reasons always change the allowlisted public projection.
 	// Assignment-driven updates skip this publisher and use todo.assigned.
 	boardRefreshPublisher := todoapp.BoardRefreshPublisherFunc(func(ctx context.Context, projectID int64, reason string, entity refresh.Entity) {
+		if reason == todoapp.RefreshReasonTodoUpdated {
+			server.emitRefreshNeeded(ctx, projectID, reason, entity)
+			return
+		}
 		server.emitPublicRefreshNeeded(ctx, projectID, reason, entity)
 	})
 	creatorRequestPublisher := todoapp.CreatorNotificationRequestPublisher(server)

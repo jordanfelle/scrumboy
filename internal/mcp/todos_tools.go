@@ -657,5 +657,6 @@ func todoResult(brief bool, item todoItem) any {
 		UpdatedAt:        item.UpdatedAt,
 		DoneAt:           item.DoneAt,
 		ArchivedAt:       item.ArchivedAt,
+		DueAt:            item.DueAt,
 	}
 }

@@ -103,7 +103,7 @@ func (d *dueReminderScheduler) publishReminder(ctx context.Context, r store.DueR
 		ColumnKey:            r.Todo.ColumnKey,
 		AssigneeUserID:       r.Todo.AssigneeUserID,
 		AssigneeStableUserID: r.AssigneeStableUserID,
-		DueAt:                r.Todo.DueAt.UTC().Format(time.RFC3339),
+		DueAt:                r.Todo.DueAt.UTC().Format(time.RFC3339Nano),
 		LeadHours:            r.LeadHours,
 	})
 	if err != nil {

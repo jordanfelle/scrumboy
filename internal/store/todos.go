@@ -600,6 +600,7 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 				return Todo{}, fmt.Errorf("commit update todo: %w", err)
 			}
 			existing.MaterialChanged = bodyChanged
+			existing.PublicProjectionChanged = bodyChanged
 			existing.Body = in.Body
 			existing.UpdatedAt = time.UnixMilli(nowMs).UTC()
 			if err := s.UpdateBoardActivity(ctx, existing.ProjectID); err != nil {
@@ -977,6 +978,7 @@ func (s *Store) UpdateTodo(ctx context.Context, todoID int64, in UpdateTodoInput
 	existing.UpdatedAt = time.UnixMilli(nowMs).UTC()
 	existing.AssignmentChanged = assignmentChanged
 	existing.MaterialChanged = materialChanged
+	existing.PublicProjectionChanged = publicFieldsChanged
 
 	if s.todoAssignedPublisher != nil && assignmentChanged && !isAnonymousBoard {
 		actorID, _ := UserIDFromContext(ctx)

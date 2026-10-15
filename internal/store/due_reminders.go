@@ -87,6 +87,37 @@ type DueReminder struct {
 	LeadHours            int
 }
 
+// GetTodoDueReminderState returns the current todo plus whether its current
+// workflow column is a completion column. It is intentionally narrow: email
+// delivery uses it to re-check a claimed reminder without granting a general
+// unauthorized todo-read capability.
+func (s *Store) GetTodoDueReminderState(ctx context.Context, todoID int64) (Todo, bool, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return Todo{}, false, fmt.Errorf("begin due reminder state: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	todo, err := getTodoTx(ctx, tx, todoID)
+	if err != nil {
+		return Todo{}, false, err
+	}
+	var done bool
+	if err := tx.QueryRowContext(ctx, `
+SELECT is_done
+FROM project_workflow_columns
+WHERE project_id = ? AND key = ?`, todo.ProjectID, todo.ColumnKey).Scan(&done); err != nil {
+		if err == sql.ErrNoRows {
+			return Todo{}, false, ErrNotFound
+		}
+		return Todo{}, false, fmt.Errorf("due reminder workflow state: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Todo{}, false, fmt.Errorf("commit due reminder state: %w", err)
+	}
+	return todo, done, nil
+}
+
 // ClaimDueReminders marks every pending todo that has entered its reminder
 // window as reminded, and returns the ones that are still upcoming. The mark
 // and the read happen in one transaction, so a todo is claimed at most once per

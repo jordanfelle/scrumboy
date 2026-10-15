@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	todoapp "scrumboy/internal/application/todo"
 )
@@ -20,6 +21,42 @@ func TestBuildUpdatePatch_patchSprintId_omitted(t *testing.T) {
 	}
 	if patch.SprintID.Present {
 		t.Fatalf("omitted sprintId field = %+v, want absent", patch.SprintID)
+	}
+}
+
+func TestTodoResultBriefOmitsOnlyBodyAndRetainsDueAt(t *testing.T) {
+	due := time.Date(2026, 11, 1, 17, 0, 0, 0, time.UTC)
+	item := todoItem{ProjectSlug: "roadmap", LocalID: 4, Title: "Ship it", Body: "sensitive body", DueAt: &due}
+
+	decode := func(value any) map[string]any {
+		t.Helper()
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	full := decode(todoResult(false, item))
+	if full["body"] != item.Body || full["dueAt"] != due.Format(time.RFC3339) {
+		t.Fatalf("full projection = %+v", full)
+	}
+	brief := decode(todoResult(true, item))
+	if _, ok := brief["body"]; ok {
+		t.Fatalf("brief projection returned body: %+v", brief)
+	}
+	if brief["dueAt"] != due.Format(time.RFC3339) {
+		t.Fatalf("brief dueAt = %v, want %s", brief["dueAt"], due.Format(time.RFC3339))
+	}
+
+	item.DueAt = nil
+	brief = decode(todoResult(true, item))
+	if dueAt, ok := brief["dueAt"]; !ok || dueAt != nil {
+		t.Fatalf("unset brief dueAt = %v present=%v, want explicit null", dueAt, ok)
 	}
 }
 

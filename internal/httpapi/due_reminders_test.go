@@ -34,12 +34,18 @@ func dueSoonEvent(t *testing.T, assignee *int64, dueAt time.Time) eventbus.Event
 	t.Helper()
 	payload, err := json.Marshal(eventbus.TodoDueSoonPayload{
 		ProjectID: 7, ProjectSlug: "roadmap", TodoID: 11, LocalID: 4, Title: "Ship it",
-		AssigneeUserID: assignee, DueAt: dueAt.UTC().Format(time.RFC3339), LeadHours: 24,
+		AssigneeUserID: assignee, AssigneeStableUserID: "assignee-public",
+		DueAt: dueAt.UTC().Format(time.RFC3339), LeadHours: 24,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return eventbus.Event{Type: eventbus.TodoDueSoonEventType, ProjectID: 7, Payload: payload}
+}
+
+func configureDueReminderFake(st *emailNotifyFakeStore, dueAt time.Time) {
+	due := dueAt.UTC()
+	st.dueTodo.DueAt = &due
 }
 
 func TestEmailNotifier_DueSoon_EmailsAssignee(t *testing.T) {
@@ -48,6 +54,7 @@ func TestEmailNotifier_DueSoon_EmailsAssignee(t *testing.T) {
 	n := newEmailNotifier(st, q, "https://example.test", true, discardLogger())
 	assignee := int64(2)
 	due := time.Date(2026, 11, 1, 17, 0, 0, 0, time.UTC)
+	configureDueReminderFake(st, due)
 
 	n.OnEvent(context.Background(), dueSoonEvent(t, &assignee, due))
 	items := drainAfterAsync(q)
@@ -74,6 +81,7 @@ func TestEmailNotifier_DueSoon_RespectsPreferencesAndRecipient(t *testing.T) {
 
 	t.Run("unassigned has no recipient", func(t *testing.T) {
 		st := newEmailNotifyFake()
+		configureDueReminderFake(st, due)
 		q := newMailQueue(discardLogger())
 		newEmailNotifier(st, q, "https://example.test", true, discardLogger()).OnEvent(context.Background(), dueSoonEvent(t, nil, due))
 		if got := drainAfterAsync(q); len(got) != 0 {
@@ -82,6 +90,7 @@ func TestEmailNotifier_DueSoon_RespectsPreferencesAndRecipient(t *testing.T) {
 	})
 	t.Run("master opt-in off", func(t *testing.T) {
 		st := newEmailNotifyFake()
+		configureDueReminderFake(st, due)
 		pref := st.prefs[2]
 		pref.Enabled = false
 		st.prefs[2] = pref
@@ -93,6 +102,7 @@ func TestEmailNotifier_DueSoon_RespectsPreferencesAndRecipient(t *testing.T) {
 	})
 	t.Run("assigned category off", func(t *testing.T) {
 		st := newEmailNotifyFake()
+		configureDueReminderFake(st, due)
 		pref := st.prefs[2]
 		pref.Assigned = false
 		st.prefs[2] = pref
@@ -104,12 +114,97 @@ func TestEmailNotifier_DueSoon_RespectsPreferencesAndRecipient(t *testing.T) {
 	})
 	t.Run("smtp not configured", func(t *testing.T) {
 		st := newEmailNotifyFake()
+		configureDueReminderFake(st, due)
 		q := newMailQueue(discardLogger())
 		newEmailNotifier(st, q, "https://example.test", false, discardLogger()).OnEvent(context.Background(), dueSoonEvent(t, &assignee, due))
 		if got := drainAfterAsync(q); len(got) != 0 {
 			t.Fatalf("queued = %d, want 0", len(got))
 		}
 	})
+}
+
+func TestEmailNotifier_DueSoon_RevalidatesBeforeEnqueueAndDelivery(t *testing.T) {
+	due := time.Now().UTC().Add(6 * time.Hour).Truncate(time.Second)
+	assignee := int64(2)
+	event := dueSoonEvent(t, &assignee, due)
+
+	mutations := map[string]func(*emailNotifyFakeStore){
+		"membership removed": func(st *emailNotifyFakeStore) { st.roles[assignee] = "" },
+		"reassigned": func(st *emailNotifyFakeStore) {
+			other := int64(3)
+			st.dueTodo.AssigneeUserID = &other
+		},
+		"due date changed": func(st *emailNotifyFakeStore) {
+			changed := due.Add(time.Hour)
+			st.dueTodo.DueAt = &changed
+		},
+		"recipient identity replaced": func(st *emailNotifyFakeStore) {
+			user := st.users[assignee]
+			user.PublicID = "replacement-public"
+			st.users[assignee] = user
+		},
+		"preference changed": func(st *emailNotifyFakeStore) {
+			pref := st.prefs[assignee]
+			pref.Assigned = false
+			st.prefs[assignee] = pref
+		},
+		"todo archived": func(st *emailNotifyFakeStore) {
+			now := time.Now().UTC()
+			st.dueTodo.ArchivedAt = &now
+		},
+		"todo completed": func(st *emailNotifyFakeStore) { st.dueDone = true },
+	}
+
+	for name, mutate := range mutations {
+		t.Run(name+" before enqueue", func(t *testing.T) {
+			st := newEmailNotifyFake()
+			configureDueReminderFake(st, due)
+			mutate(st)
+			q := newMailQueue(discardLogger())
+			newEmailNotifier(st, q, "https://example.test", true, discardLogger()).handleDueSoon(context.Background(), event)
+			if got := q.Drain(); len(got) != 0 {
+				t.Fatalf("queued after authorization was revoked: %+v", got)
+			}
+		})
+
+		t.Run(name+" after enqueue", func(t *testing.T) {
+			st := newEmailNotifyFake()
+			configureDueReminderFake(st, due)
+			q := newMailQueue(discardLogger())
+			newEmailNotifier(st, q, "https://example.test", true, discardLogger()).handleDueSoon(context.Background(), event)
+			queued := q.Drain()
+			if len(queued) != 1 || queued[0].Prepare == nil {
+				t.Fatalf("initial queue = %+v, want one deferred delivery", queued)
+			}
+			mutate(st)
+			if prepared, ok, err := queued[0].Prepare(context.Background()); err != nil || ok {
+				t.Fatalf("Prepare after authorization was revoked = (%+v, %v, %v), want dropped", prepared, ok, err)
+			}
+		})
+	}
+}
+
+func TestEmailNotifier_DueSoon_AuthorizedDeliveryUsesCurrentData(t *testing.T) {
+	due := time.Now().UTC().Add(6 * time.Hour).Truncate(time.Second)
+	assignee := int64(2)
+	st := newEmailNotifyFake()
+	configureDueReminderFake(st, due)
+	st.dueTodo.Title = "Current title"
+	q := newMailQueue(discardLogger())
+	newEmailNotifier(st, q, "https://example.test", true, discardLogger()).handleDueSoon(context.Background(), dueSoonEvent(t, &assignee, due))
+	queued := q.Drain()
+	if len(queued) != 1 || queued[0].Prepare == nil {
+		t.Fatalf("initial queue = %+v, want one deferred delivery", queued)
+	}
+	st.dueTodo.Title = "Newest authorized title"
+	prepared, ok, err := queued[0].Prepare(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("Prepare = (%+v, %v, %v), want authorized", prepared, ok, err)
+	}
+	if prepared.To != "assignee@example.com" || prepared.Subject != "Due soon: Newest authorized title" ||
+		!strings.Contains(prepared.Body, "#4 Newest authorized title") {
+		t.Fatalf("prepared delivery did not use current authorized data: %+v", prepared)
+	}
 }
 
 func TestDueReminderScheduler_PublishesOncePerDueDate(t *testing.T) {
@@ -124,7 +219,7 @@ func TestDueReminderScheduler_PublishesOncePerDueDate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	due := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)
+	due := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second).Add(123 * time.Millisecond)
 	todo, err := st.CreateTodo(ownerCtx, project.ID, store.CreateTodoInput{
 		Title: "Ship it", ColumnKey: store.DefaultColumnDoing, DueAt: &due, AssigneeUserID: &owner.ID,
 	}, store.ModeFull)
@@ -160,7 +255,7 @@ func TestDueReminderScheduler_PublishesOncePerDueDate(t *testing.T) {
 	}
 	if payload.TodoID != todo.ID || payload.LocalID != todo.LocalID || payload.Title != "Ship it" ||
 		payload.ProjectSlug != project.Slug || payload.LeadHours != store.DefaultDueReminderLeadHours ||
-		payload.DueAt != due.Format(time.RFC3339) {
+		payload.DueAt != due.Format(time.RFC3339Nano) {
 		t.Fatalf("payload = %+v", payload)
 	}
 	if payload.AssigneeUserID == nil || *payload.AssigneeUserID != owner.ID {
