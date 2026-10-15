@@ -168,13 +168,15 @@ type PriorityFilter struct {
 //
 // The zero value (SortOrderDefault) preserves today's manual drag-rank order
 // ("t.rank ASC, t.id ASC"). SortOrderNewest/SortOrderOldest order by
-// created_at instead; ties break on id to keep pagination stable.
+// created_at; SortOrderDue orders dated todos chronologically and undated todos
+// last. Ties break on id to keep pagination stable.
 type SortOrder string
 
 const (
 	SortOrderDefault SortOrder = ""
 	SortOrderNewest  SortOrder = "newest"
 	SortOrderOldest  SortOrder = "oldest"
+	SortOrderDue     SortOrder = "due"
 )
 
 // ProjectContext bundles project, role, and auth state computed once per request.

@@ -62,6 +62,7 @@ func TestBoardGetContract_FirstPageCursorSentinels(t *testing.T) {
 		{name: "manual default", wantA: math.MinInt64, wantB: 0, wantSO: store.SortOrderDefault},
 		{name: "newest", sort: "newest", wantA: math.MaxInt64, wantB: math.MaxInt64, wantSO: store.SortOrderNewest},
 		{name: "oldest", sort: "oldest", wantA: math.MinInt64, wantB: 0, wantSO: store.SortOrderOldest},
+		{name: "due", sort: "due", wantA: math.MinInt64, wantB: 0, wantSO: store.SortOrderDue},
 	}
 
 	for _, tt := range tests {
@@ -116,7 +117,7 @@ func TestBoardGetContract_PerColumnCursorIndependence(t *testing.T) {
 }
 
 func TestBoardGetContract_SuppliedCursorOverridesSortSentinel(t *testing.T) {
-	for _, sortOrder := range []string{"", "newest", "oldest"} {
+	for _, sortOrder := range []string{"", "newest", "oldest", "due"} {
 		t.Run("sort="+sortOrder, func(t *testing.T) {
 			h := newBoardGetContractHarness(t)
 
@@ -199,11 +200,13 @@ func TestBoardGetContract_OpaqueOutputCursorConstruction(t *testing.T) {
 		{name: "manual rank", wantCursor: encodeBoardCursor("900:41")},
 		{name: "newest creation time", sort: "newest", wantCursor: encodeBoardCursor("1700000000123:41")},
 		{name: "oldest creation time", sort: "oldest", wantCursor: encodeBoardCursor("1700000000123:41")},
+		{name: "due time", sort: "due", wantCursor: encodeBoardCursor("1700003600123:41")},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newBoardGetContractHarness(t)
+			dueAt := createdAt.Add(time.Hour)
 			h.Recording.ListResults["triage"] = boardGetListResult{
 				Todos: []store.Todo{
 					boardGetTodo(40, h.Project.ID, 800, "triage", "first", createdAt.Add(-time.Second)),
@@ -213,6 +216,11 @@ func TestBoardGetContract_OpaqueOutputCursorConstruction(t *testing.T) {
 				HasMore: true,
 			}
 			h.Recording.CountResults["triage"] = 7
+			if tt.sort == "due" {
+				for i := range h.Recording.ListResults["triage"].Todos {
+					h.Recording.ListResults["triage"].Todos[i].DueAt = &dueAt
+				}
+			}
 
 			_, meta, err := h.call(map[string]any{"projectSlug": h.Project.Slug, "sort": tt.sort})
 			if err != nil {

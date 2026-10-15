@@ -1830,6 +1830,42 @@ html[data-wallpaper-active] #settingsDialog.dialog {
   min-width: 0;
 }
 
+#todoDialog .dialog__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+#todoDialog .dialog__title {
+  grid-column: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#todoDialog .dialog__header-right {
+  grid-column: 3;
+  justify-self: end;
+  max-width: 100%;
+}
+
+.todo-dialog-overdue {
+  color: var(--danger);
+  font-size: var(--fs-13);
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+#todoDialog .todo-dialog-overdue {
+  grid-column: 2;
+  justify-self: center;
+}
+
+.todo-dialog-overdue[hidden] {
+  display: none;
+}
+
 .voice-command-trigger,
 #newTodoBtn,
 #deleteProjectBtn,
@@ -5385,6 +5421,28 @@ label:has(input[type="radio"][name="importMode"]:disabled) {
   color: #ef4444;
 }
 
+.card__top-actions {
+  position: absolute;
+  top: var(--s-6);
+  right: var(--s-6);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.card__overdue-warning {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--s-12);
+  color: var(--danger);
+  font-size: var(--fs-14);
+  font-weight: 900;
+  line-height: 1;
+  pointer-events: auto;
+}
+
 .card__drag-handle {
   display: flex;
   flex-shrink: 0;
@@ -5396,7 +5454,7 @@ label:has(input[type="radio"][name="importMode"]:disabled) {
   cursor: grab;
   touch-action: pan-y;
   /* Allow vertical scrolling but prevent horizontal */
-  margin-left: var(--s-8);
+  margin-left: 0;
   padding: var(--s-4);
 }
 
@@ -5407,15 +5465,11 @@ label:has(input[type="radio"][name="importMode"]:disabled) {
 
 @media (min-width: 768px) {
   .card__title-row {
-    padding-right: calc(var(--s-28) + var(--s-8));
+    padding-right: calc(var(--s-28) + var(--s-20));
   }
 
   .card__drag-handle {
-    position: absolute;
-    top: var(--s-6);
-    right: var(--s-6);
-    z-index: 1;
-    margin-left: 0;
+    position: static;
   }
 }
 
@@ -5453,7 +5507,7 @@ label:has(input[type="radio"][name="importMode"]:disabled) {
     grid-column: 1 / -1;
     grid-row: 1;
     /* Reserve room so wrapped titles do not run under the fixed drag handle. */
-    padding-right: calc(var(--s-28) + var(--s-8));
+    padding-right: calc(var(--s-28) + var(--s-20));
   }
 
   .card__title {
@@ -5484,10 +5538,7 @@ label:has(input[type="radio"][name="importMode"]:disabled) {
 
   .card__drag-handle {
     display: flex;
-    position: absolute;
-    top: var(--s-6);
-    right: var(--s-6);
-    z-index: 1;
+    position: static;
     flex-direction: column;
     justify-content: center;
     margin-left: 0;

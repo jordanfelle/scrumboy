@@ -38,6 +38,7 @@ describe('board todo sort preferences', () => {
     expect(normalizeBoardTodoSort('unexpected')).toBe('default');
     expect(normalizeBoardTodoSort('newest')).toBe('newest');
     expect(normalizeBoardTodoSort('oldest')).toBe('oldest');
+    expect(normalizeBoardTodoSort('due')).toBe('due');
     expect(normalizeBoardTodoSort('default')).toBe('default');
   });
 
@@ -70,6 +71,11 @@ describe('board todo sort preferences', () => {
   it('loadBoardTodoSortPreferenceFromServer applies server oldest after reset', async () => {
     await loadBoardTodoSortPreferenceFromServer(async () => ({ value: 'oldest' }));
     expect(getBoardTodoSortPreference()).toBe('oldest');
+  });
+
+  it('loadBoardTodoSortPreferenceFromServer applies server due after reset', async () => {
+    await loadBoardTodoSortPreferenceFromServer(async () => ({ value: 'due' }));
+    expect(getBoardTodoSortPreference()).toBe('due');
   });
 
   it('saves the board sort preference through the existing user preference endpoint when signed in', () => {
@@ -107,18 +113,20 @@ describe('board todo sort preferences', () => {
     expect(getBoardTodoSortPreference()).toBe('default');
   });
 
-  it('treats only newest and oldest as valid URL sort overrides', () => {
+  it('treats newest, oldest, and due as valid URL sort overrides', () => {
     expect(isBoardTodoSortUrlParam('newest')).toBe(true);
     expect(isBoardTodoSortUrlParam('oldest')).toBe(true);
+    expect(isBoardTodoSortUrlParam('due')).toBe(true);
     expect(isBoardTodoSortUrlParam('default')).toBe(false);
     expect(isBoardTodoSortUrlParam('')).toBe(false);
     expect(isBoardTodoSortUrlParam(null)).toBe(false);
     expect(isBoardTodoSortUrlParam('bogus')).toBe(false);
   });
 
-  it('maps a saved preference to a URL sort param only for newest and oldest', () => {
+  it('maps each computed saved preference to a URL sort param', () => {
     expect(boardTodoSortUrlParam('newest')).toBe('newest');
     expect(boardTodoSortUrlParam('oldest')).toBe('oldest');
+    expect(boardTodoSortUrlParam('due')).toBe('due');
     expect(boardTodoSortUrlParam('default')).toBeNull();
   });
 });

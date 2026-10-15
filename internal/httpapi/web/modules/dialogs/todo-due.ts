@@ -37,6 +37,18 @@ export function resolveDueAtForSubmit(
   return currentValue === "" ? null : (localInputValueToIso(currentValue) ?? undefined);
 }
 
+/**
+ * Resolves the due instant used by live overdue state. Keep the stored instant
+ * while the minute-precision field is unchanged so seconds are not truncated.
+ */
+export function resolveDueAtForOverdueCheck(
+  currentValue: string,
+  baselineIso: string | null | undefined,
+): string | null {
+  if (currentValue === isoToLocalInputValue(baselineIso)) return baselineIso ?? null;
+  return localInputValueToIso(currentValue);
+}
+
 /** True when the due date has passed and the card is not in a done column. */
 export function isOverdue(iso: string | null | undefined, inDoneColumn: boolean, nowMs: number = Date.now()): boolean {
   if (!iso || inDoneColumn) return false;
@@ -49,6 +61,49 @@ export function formatDueBadge(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
+
+function ordinalDay(day: number): string {
+  const lastTwo = day % 100;
+  if (lastTwo >= 11 && lastTwo <= 13) return `${day}th`;
+  switch (day % 10) {
+    case 1: return `${day}st`;
+    case 2: return `${day}nd`;
+    case 3: return `${day}rd`;
+    default: return `${day}th`;
+  }
+}
+
+/** Full English-style date for the overdue warning, using the viewer's local calendar date. */
+export function formatDueDateTooltip(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${WEEKDAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${ordinalDay(d.getDate())} ${d.getFullYear()}`;
+}
+
+export type TodoOverdueState = {
+  mode: "create" | "edit";
+  dueAt: string | null | undefined;
+  archived: boolean;
+  inDoneColumn: boolean;
+  nowMs?: number;
+};
+
+export function shouldShowTodoOverdue(state: TodoOverdueState): boolean {
+  return state.mode === "edit"
+    && !state.archived
+    && isOverdue(state.dueAt, state.inDoneColumn, state.nowMs);
+}
+
+/** Applies reusable dialog state without allowing a previous todo's warning to leak. */
+export function setTodoOverdueIndicatorVisibility(
+  indicator: HTMLElement | null | undefined,
+  state: TodoOverdueState,
+): void {
+  if (indicator) indicator.hidden = !shouldShowTodoOverdue(state);
 }
 
 /**

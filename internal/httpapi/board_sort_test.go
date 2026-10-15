@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
 
 	"scrumboy/internal/store"
 )
@@ -77,6 +78,20 @@ func TestBoardSortOrder_RESTContract(t *testing.T) {
 			t.Fatalf("GET board sort=oldest: status=%d body=%s", resp.StatusCode, string(body))
 		}
 		assertBacklogTitlesInOrder(t, board, "First", "Second", "Third")
+	})
+
+	t.Run("sort=due", func(t *testing.T) {
+		past := time.Now().UTC().Add(-time.Hour).UnixMilli()
+		future := time.Now().UTC().Add(time.Hour).UnixMilli()
+		if _, err := sqlDB.Exec(`UPDATE todos SET due_at = CASE title WHEN 'Third' THEN ? WHEN 'First' THEN ? ELSE NULL END WHERE project_id = ?`, past, future, project.ID); err != nil {
+			t.Fatalf("seed due dates: %v", err)
+		}
+		var board sortBoardResponse
+		resp, body := doJSON(t, client, http.MethodGet, ts.URL+"/api/board/"+project.Slug+"?sort=due", nil, &board)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET board sort=due: status=%d body=%s", resp.StatusCode, string(body))
+		}
+		assertBacklogTitlesInOrder(t, board, "Third", "First", "Second")
 	})
 
 	invalidRoutes := []struct {

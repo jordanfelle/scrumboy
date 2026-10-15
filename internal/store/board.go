@@ -113,6 +113,11 @@ func laneCursor(t Todo, sortOrder SortOrder) string {
 	switch sortOrder {
 	case SortOrderNewest, SortOrderOldest:
 		return fmt.Sprintf("%d:%d", t.CreatedAt.UnixMilli(), t.ID)
+	case SortOrderDue:
+		if t.DueAt == nil {
+			return fmt.Sprintf("%d:%d", int64(math.MaxInt64), t.ID)
+		}
+		return fmt.Sprintf("%d:%d", t.DueAt.UnixMilli(), t.ID)
 	default:
 		return fmt.Sprintf("%d:%d", t.Rank, t.ID)
 	}
@@ -120,14 +125,17 @@ func laneCursor(t Todo, sortOrder SortOrder) string {
 
 // laneOrderBy returns the ORDER BY fragment (no leading "ORDER BY") for a
 // single lane's todos under the given sortOrder. Default preserves the
-// existing manual drag-rank order; newest/oldest order by created_at with id
-// as a stable tiebreaker.
+// existing manual drag-rank order; newest/oldest order by created_at; due
+// orders chronologically and maps NULL to MaxInt64 so undated todos stay last.
+// All computed orders use id as a stable tiebreaker.
 func laneOrderBy(sortOrder SortOrder) string {
 	switch sortOrder {
 	case SortOrderNewest:
 		return "t.created_at DESC, t.id DESC"
 	case SortOrderOldest:
 		return "t.created_at ASC, t.id ASC"
+	case SortOrderDue:
+		return "COALESCE(t.due_at, 9223372036854775807) ASC, t.id ASC"
 	default:
 		return "t.rank ASC, t.id ASC"
 	}
@@ -142,6 +150,8 @@ func laneCursorPredicate(sortOrder SortOrder) string {
 		return " AND (t.created_at, t.id) < (?, ?)"
 	case SortOrderOldest:
 		return " AND (t.created_at, t.id) > (?, ?)"
+	case SortOrderDue:
+		return " AND (COALESCE(t.due_at, 9223372036854775807), t.id) > (?, ?)"
 	default:
 		return " AND (t.rank, t.id) > (?, ?)"
 	}
@@ -702,8 +712,9 @@ ORDER BY `+orderBy+`
 // ListTodosForBoardLane returns todos for one status with cursor-based pagination.
 // Cursor format is "a:b" where (a, b) depends on sortOrder: for the default manual
 // order it's "rank:id" (DB id, not localId); for sortOrder=newest/oldest it's
-// "createdAtMs:id". Returns (items, nextCursor, hasMore). nextCursor is empty when
-// hasMore is false.
+// "createdAtMs:id"; for sortOrder=due it's "dueAtMs:id", with MaxInt64 as the
+// dueAtMs for undated todos. Returns (items, nextCursor, hasMore). nextCursor is
+// empty when hasMore is false.
 //
 // Ordering contract: the query's ORDER BY and cursor predicate are chosen together by
 // laneOrderBy/laneCursorPredicate for the given sortOrder, and laneCursor encodes the

@@ -4,7 +4,7 @@ export const BOARD_TODO_SORT_DEFAULT = 'default';
 export const BOARD_TODO_SORT_STORAGE_KEY = 'scrumboy.boardTodoSort';
 export const BOARD_TODO_SORT_PREFERENCE_KEY = 'boardTodoSort';
 export function isBoardTodoSortUrlParam(value) {
-    return value === 'newest' || value === 'oldest';
+    return value === 'newest' || value === 'oldest' || value === 'due';
 }
 export function normalizeBoardTodoSort(value) {
     return isBoardTodoSortUrlParam(value) ? value : BOARD_TODO_SORT_DEFAULT;

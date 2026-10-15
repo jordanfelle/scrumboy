@@ -784,7 +784,7 @@ func TestMCPBoardGetTransportContract_ToolsListAdvertisesCanonicalAndSort(t *tes
 	if sortProperty["type"] != "string" {
 		t.Fatalf("board_get sort type = %#v, want string", sortProperty["type"])
 	}
-	if got, want := sortProperty["enum"], []any{"newest", "oldest"}; !reflect.DeepEqual(got, want) {
+	if got, want := sortProperty["enum"], []any{"newest", "oldest", "due"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("board_get sort enum = %#v, want %#v", got, want)
 	}
 	description, _ := sortProperty["description"].(string)
@@ -810,7 +810,7 @@ func TestMCPBoardGetTransportContract_ToolsListAdvertisesCanonicalAndSort(t *tes
 func TestMCPBoardGetTransportContract_RuntimeSortMatchesAdvertisedValues(t *testing.T) {
 	fixture := newBoardGetTransportFixture(t)
 
-	for _, sortOrder := range []string{"newest", "oldest"} {
+	for _, sortOrder := range []string{"newest", "oldest", "due"} {
 		resp, out := doJSONRPC(t, fixture.client, fixture.serverURL, map[string]any{
 			"jsonrpc": "2.0",
 			"id":      sortOrder,

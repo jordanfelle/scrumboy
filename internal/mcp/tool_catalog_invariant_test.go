@@ -329,7 +329,7 @@ func TestToolCatalog_BoardGetSortAdvertisesRuntimeContract(t *testing.T) {
 	if !ok {
 		t.Fatalf("board_get sort enum has unexpected shape: %#v", sortProperty["enum"])
 	}
-	wantEnum := []string{"newest", "oldest"}
+	wantEnum := []string{"newest", "oldest", "due"}
 	if len(enum) != len(wantEnum) {
 		t.Fatalf("board_get sort enum = %#v, want %#v", enum, wantEnum)
 	}
@@ -339,7 +339,7 @@ func TestToolCatalog_BoardGetSortAdvertisesRuntimeContract(t *testing.T) {
 		}
 	}
 	description, _ := sortProperty["description"].(string)
-	for _, requiredText := range []string{"newest", "oldest", "omit", "manual drag-rank"} {
+	for _, requiredText := range []string{"newest", "oldest", "due", "omit", "manual drag-rank"} {
 		if !strings.Contains(description, requiredText) {
 			t.Fatalf("board_get sort description %q missing %q", description, requiredText)
 		}

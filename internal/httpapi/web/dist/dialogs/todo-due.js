@@ -33,6 +33,15 @@ export function resolveDueAtForSubmit(mode, currentValue, baselineIso) {
         return undefined;
     return currentValue === "" ? null : (localInputValueToIso(currentValue) ?? undefined);
 }
+/**
+ * Resolves the due instant used by live overdue state. Keep the stored instant
+ * while the minute-precision field is unchanged so seconds are not truncated.
+ */
+export function resolveDueAtForOverdueCheck(currentValue, baselineIso) {
+    if (currentValue === isoToLocalInputValue(baselineIso))
+        return baselineIso ?? null;
+    return localInputValueToIso(currentValue);
+}
 /** True when the due date has passed and the card is not in a done column. */
 export function isOverdue(iso, inDoneColumn, nowMs = Date.now()) {
     if (!iso || inDoneColumn)
@@ -46,6 +55,36 @@ export function formatDueBadge(iso) {
     if (Number.isNaN(d.getTime()))
         return "";
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function ordinalDay(day) {
+    const lastTwo = day % 100;
+    if (lastTwo >= 11 && lastTwo <= 13)
+        return `${day}th`;
+    switch (day % 10) {
+        case 1: return `${day}st`;
+        case 2: return `${day}nd`;
+        case 3: return `${day}rd`;
+        default: return `${day}th`;
+    }
+}
+/** Full English-style date for the overdue warning, using the viewer's local calendar date. */
+export function formatDueDateTooltip(iso) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime()))
+        return "";
+    return `${WEEKDAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${ordinalDay(d.getDate())} ${d.getFullYear()}`;
+}
+export function shouldShowTodoOverdue(state) {
+    return state.mode === "edit"
+        && !state.archived
+        && isOverdue(state.dueAt, state.inDoneColumn, state.nowMs);
+}
+/** Applies reusable dialog state without allowing a previous todo's warning to leak. */
+export function setTodoOverdueIndicatorVisibility(indicator, state) {
+    if (indicator)
+        indicator.hidden = !shouldShowTodoOverdue(state);
 }
 /**
  * A half-typed datetime-local reports value "" with validity.badInput set. That must not be

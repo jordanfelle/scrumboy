@@ -5,11 +5,11 @@ export const BOARD_TODO_SORT_DEFAULT = 'default';
 export const BOARD_TODO_SORT_STORAGE_KEY = 'scrumboy.boardTodoSort';
 export const BOARD_TODO_SORT_PREFERENCE_KEY = 'boardTodoSort';
 
-export type BoardTodoSortUrlParam = 'newest' | 'oldest';
+export type BoardTodoSortUrlParam = 'newest' | 'oldest' | 'due';
 export type BoardTodoSort = 'default' | BoardTodoSortUrlParam;
 
 export function isBoardTodoSortUrlParam(value: unknown): value is BoardTodoSortUrlParam {
-  return value === 'newest' || value === 'oldest';
+  return value === 'newest' || value === 'oldest' || value === 'due';
 }
 
 export function normalizeBoardTodoSort(value: unknown): BoardTodoSort {

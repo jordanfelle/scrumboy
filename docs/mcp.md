@@ -424,8 +424,9 @@ grammar and a real tier key such as `"none"` remains filterable. An unknown tier
 key returns an empty board.
 
 `board_get` also accepts an optional string `sort`: `"newest"` or `"oldest"`
-orders items within each lane by creation time with a stable ID tie-break.
-Omit `sort` to preserve manual drag-rank order.
+orders items within each lane by creation time, while `"due"` orders dated items
+chronologically and places undated items last. Every computed order uses a
+stable ID tie-break. Omit `sort` to preserve manual drag-rank order.
 
 The optional `sprintId` filter is the stored sprint row ID returned as
 `sprintId` by `sprints_list`. It is not the project-local `number` in the same
