@@ -11,7 +11,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect, test, type Page, type Request } from "@playwright/test";
+import { expect, test, type Browser, type BrowserContext, type BrowserContextOptions, type Page, type Request } from "@playwright/test";
 
 const webDir = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(webDir, "..", "..", "..");
@@ -24,12 +24,45 @@ let dataDir = "";
 let baseUrl = "";
 let publicSlug = "";
 let privateSlug = "";
+/** Published board with sprints disabled and no priority tiers: the public filter toggle starts hidden. */
+let bareSlug = "";
+/** Published board whose tags overflow the desktop Omni rail; tag k is on (TAG_NAMES.length - k) stories. */
+let tagSlug = "";
+const TAG_NAMES = [
+  "alpha-component-library", "beta-design-system", "gamma-performance", "delta-accessibility",
+  "epsilon-localization", "zeta-observability", "eta-infrastructure", "theta-documentation",
+  "iota-release-process", "kappa-customer-support", "lambda-data-pipeline", "mu-security-review",
+  "nu-onboarding-flow", "xi-final-tag",
+];
+/** Published board for card layout: many tag-heavy cards, one maximum-length unbroken tag, and more than one lane page. */
+let cardSlug = "";
+const CARD_LAYOUT_STORIES = 24;
+const CARD_LAYOUT_TAGS = [
+  "frontend-platform", "design-review", "performance-budget", "accessibility-audit", "localization-sweep",
+  "observability-gap", "infrastructure-cost", "documentation-debt", "release-train", "customer-escalation",
+  "data-pipeline-fix", "security-review",
+];
+/** Server tag rule: ^[a-z0-9][a-z0-9-]{0,31}$, so 32 characters with no break opportunity is the worst case. */
+const LONGEST_TAG = "abcdefghijklmnopqrstuvwxyz012345";
+// Tag names are canonicalized server-side (lowercase, restricted charset), so hostile
+// names cannot reach a public board end to end; their escaping is unit-tested.
 
 function setPublication(slug: string, enabled: boolean): void {
   const db = new DatabaseSync(path.join(dataDir, "app.db"));
   try {
     db.exec("PRAGMA busy_timeout = 5000");
     db.prepare("UPDATE projects SET public_view_enabled = ? WHERE slug = ?").run(enabled ? 1 : 0, slug);
+  } finally {
+    db.close();
+  }
+}
+
+function stripSprintsAndPriorities(slug: string): void {
+  const db = new DatabaseSync(path.join(dataDir, "app.db"));
+  try {
+    db.exec("PRAGMA busy_timeout = 5000");
+    db.prepare("UPDATE projects SET sprints_enabled = 0 WHERE slug = ?").run(slug);
+    db.prepare("DELETE FROM project_priorities WHERE project_id = (SELECT id FROM projects WHERE slug = ?)").run(slug);
   } finally {
     db.close();
   }
@@ -56,6 +89,9 @@ test.beforeAll(async () => {
       ...process.env,
       SCRUMBOY_MODE: "full",
       SCRUMBOY_PUBLIC_PROJECTS_ENABLED: "1",
+      // Lets the Omni tests below present distinct client addresses (X-Forwarded-For) so their
+      // traffic does not exhaust the per-IP public read limit (120/min) shared by the other tests.
+      SCRUMBOY_TRUST_PROXY: "1",
       DATA_DIR: dataDir,
       BIND_ADDR: `127.0.0.1:${port}`,
       SCRUMBOY_TLS_CERT: path.join(dataDir, "no-cert"),
@@ -88,6 +124,28 @@ test.beforeAll(async () => {
   await owner.json("POST", `/api/board/${publicSlug}/todos`, { title: "Second story", columnKey: "done" });
   await owner.json("POST", `/api/board/${privateSlug}/todos`, { title: "Private secret story" });
   setPublication(publicSlug, true);
+  const bare = await owner.json<{ slug: string }>("POST", "/api/projects", { name: "Bare Public" });
+  bareSlug = bare.slug;
+  await owner.json("POST", `/api/board/${bareSlug}/todos`, { title: "Bare story" });
+  stripSprintsAndPriorities(bareSlug);
+  setPublication(bareSlug, true);
+  const tagged = await owner.json<{ slug: string }>("POST", "/api/projects", { name: "Tagged Public" });
+  tagSlug = tagged.slug;
+  for (let j = 0; j < TAG_NAMES.length; j++) {
+    await owner.json("POST", `/api/board/${tagSlug}/todos`, { title: `Tagged story ${j}`, tags: TAG_NAMES.slice(0, TAG_NAMES.length - j) });
+  }
+  setPublication(tagSlug, true);
+  const cards = await owner.json<{ slug: string }>("POST", "/api/projects", { name: "Card Layout Public" });
+  cardSlug = cards.slug;
+  for (let j = 0; j < CARD_LAYOUT_STORIES; j++) {
+    const body: Record<string, unknown> = j === 2
+      ? { title: "Longest tag story", tags: [LONGEST_TAG] }
+      : j < 10
+        ? { title: `Many tags story ${j}`, tags: CARD_LAYOUT_TAGS.slice(0, CARD_LAYOUT_TAGS.length - (j % 6)), priorityKey: "high", estimationPoints: 8 }
+        : { title: `Filler story ${j}`, tags: ["ui"] };
+    await owner.json("POST", `/api/board/${cardSlug}/todos`, body);
+  }
+  setPublication(cardSlug, true);
 });
 
 test.afterAll(async () => {
@@ -222,7 +280,7 @@ test("a sprint created by a maintainer appears live in the public sprint filter"
   const api = trackApi(page);
   await page.goto(`${baseUrl}/${publicSlug}`);
   await expect(page.locator(".public-board-badge")).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator("#publicSprintFilter")).toHaveCount(0);
+  await expect(page.locator("#publicFilterPanel [data-public-sprint-section]")).toHaveCount(0);
 
   const owner = apiClient(baseUrl);
   await owner.json("POST", "/api/auth/login", { email: OWNER.email, password: OWNER.password });
@@ -232,9 +290,597 @@ test("a sprint created by a maintainer appears live in the public sprint filter"
     plannedStartAt: start,
     plannedEndAt: start + 7 * 24 * 60 * 60 * 1000,
   });
-  await expect(page.locator("#publicSprintFilter option", { hasText: "Live Sprint" })).toHaveCount(1, { timeout: 20_000 });
+  await expect(page.locator("#publicFilterPanel [data-public-sprint-option]", { hasText: "Live Sprint" })).toHaveCount(1, { timeout: 20_000 });
   expect(api.filter((p) => !p.startsWith(`/api/public/board/${publicSlug}`) && p !== "/api/auth/status")).toEqual([`/api/board/${publicSlug}`]);
 });
+
+type Box = { x: number; y: number; width: number; height: number };
+
+function overlaps(a: Box, b: Box): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
+function contains(outer: Box, inner: Box): boolean {
+  return inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.width <= outer.x + outer.width && inner.y + inner.height <= outer.y + outer.height;
+}
+
+async function focusedId(page: Page): Promise<string> {
+  return page.evaluate(() => (document.activeElement as HTMLElement | null)?.id ?? "");
+}
+
+async function horizontalOverflow(page: Page): Promise<number> {
+  return page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+}
+
+/** Full API URLs (path + query) so filter parameters can be inspected. */
+function trackApiUrls(page: Page): string[] {
+  const seen: string[] = [];
+  page.on("request", (req: Request) => {
+    const u = new URL(req.url());
+    if (u.pathname.startsWith("/api/")) seen.push(u.pathname + u.search);
+  });
+  return seen;
+}
+
+async function ownerClient() {
+  const owner = apiClient(baseUrl);
+  await owner.json("POST", "/api/auth/login", { email: OWNER.email, password: OWNER.password });
+  return owner;
+}
+
+async function createSprint(client: ReturnType<typeof apiClient>, slug: string, name: string): Promise<void> {
+  const start = Date.now();
+  await client.json("POST", `/api/board/${slug}/sprints`, { name, plannedStartAt: start, plannedEndAt: start + 7 * 24 * 60 * 60 * 1000 });
+}
+
+test("hidden public filter toggle and clear button are invisible, unclickable, and skipped by Tab", async ({ page }) => {
+  await page.goto(`${baseUrl}/${bareSlug}`);
+  const input = page.locator("#publicSearchInput");
+  const toggle = page.locator("#publicFilterToggle");
+  const clear = page.locator("#publicSearchClear");
+  await expect(input).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("[data-public-local-id]")).toHaveCount(1);
+
+  const expectGone = async () => {
+    for (const hidden of [toggle, clear]) {
+      await expect(hidden).toHaveAttribute("hidden", "");
+      await expect(hidden).toBeHidden();
+      expect(await hidden.evaluate((el) => getComputedStyle(el).display)).toBe("none");
+      expect(await hidden.boundingBox()).toBeNull();
+    }
+    // Where the clear button and chevron would sit, the input receives the click.
+    const box = (await input.boundingBox())!;
+    for (const offset of [10, 30]) {
+      const hit = await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.id ?? "", [box.x + box.width - offset, box.y + box.height / 2]);
+      expect(hit).toBe("publicSearchInput");
+    }
+    await input.focus();
+    await page.keyboard.press("Tab");
+    expect(["publicFilterToggle", "publicSearchClear"]).not.toContain(await focusedId(page));
+  };
+
+  // Initially hidden: no sprints, no priorities, no search text.
+  await expectGone();
+
+  // Clear button: hidden -> visible (reachable by Tab) -> hidden.
+  await input.fill("Bare");
+  await expect(clear).toBeVisible();
+  await input.focus();
+  await page.keyboard.press("Tab");
+  expect(await focusedId(page)).toBe("publicSearchClear");
+  await clear.click();
+  await expect(clear).toBeHidden();
+  expect(await focusedId(page)).toBe("publicSearchInput");
+
+  // Toggle: hidden -> visible when a sprint becomes available -> hidden when sprints are disabled.
+  const owner = await ownerClient();
+  await owner.json("PATCH", `/api/board/${bareSlug}/settings`, { sprintsEnabled: true });
+  await createSprint(owner, bareSlug, "Bare Sprint");
+  await expect(toggle).toBeVisible({ timeout: 20_000 });
+  await input.focus();
+  await page.keyboard.press("Tab");
+  expect(await focusedId(page)).toBe("publicFilterToggle");
+
+  await owner.json("PATCH", `/api/board/${bareSlug}/settings`, { sprintsEnabled: false });
+  await expect(toggle).toBeHidden({ timeout: 20_000 });
+  await expectGone();
+});
+
+for (const width of [320, 390, 1280]) {
+  test(`public filter popover at ${width}px: layout, selection, keyboard, and dismissal`, async ({ browser }) => {
+    const mobile = width < 768;
+    const height = mobile ? 700 : 800;
+    const context = await browser.newContext({ viewport: { width, height }, isMobile: mobile, hasTouch: mobile });
+    const page = await context.newPage();
+    const urls = trackApiUrls(page);
+    await page.goto(`${baseUrl}/${publicSlug}`);
+    const input = page.locator("#publicSearchInput");
+    const toggle = page.locator("#publicFilterToggle");
+    const clear = page.locator("#publicSearchClear");
+    const panel = page.locator("#publicFilterPanel");
+    const cards = page.locator("[data-public-local-id]");
+    await expect(cards).toHaveCount(2, { timeout: 30_000 });
+    await expect(input).toBeVisible();
+    await expect(toggle).toBeVisible();
+    await expect(clear).toBeHidden();
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+
+    // Typing filters while the input keeps focus; clear and chevron sit inside the input without overlapping.
+    await input.click();
+    await input.pressSequentially("Readable");
+    await expect(cards).toHaveCount(1);
+    await expect(clear).toBeVisible();
+    expect(await focusedId(page)).toBe("publicSearchInput");
+    await expect(input).toHaveValue("Readable");
+    const [inputBox, clearBox, toggleBox] = [(await input.boundingBox())!, (await clear.boundingBox())!, (await toggle.boundingBox())!];
+    expect(contains(inputBox, clearBox)).toBe(true);
+    expect(contains(inputBox, toggleBox)).toBe(true);
+    expect(overlaps(clearBox, toggleBox)).toBe(false);
+    expect(inputBox.x).toBeGreaterThanOrEqual(0);
+    expect(inputBox.x + inputBox.width).toBeLessThanOrEqual(width);
+    for (const other of await page.locator(".topbar > :visible").all()) {
+      const box = await other.boundingBox();
+      if (!box || (await other.evaluate((el) => el.classList.contains("search-input-wrapper") || el.classList.contains("spacer")))) continue;
+      expect(overlaps(box, inputBox), await other.evaluate((el) => el.outerHTML.slice(0, 80))).toBe(false);
+    }
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    await clear.click();
+    await expect(cards).toHaveCount(2);
+
+    // The popover opens fully inside the viewport, below the chevron.
+    await toggle.click();
+    await expect(panel).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const panelBox = (await panel.boundingBox())!;
+    const openToggleBox = (await toggle.boundingBox())!;
+    expect(contains({ x: 0, y: 0, width, height }, panelBox)).toBe(true);
+    expect(panelBox.y).toBeGreaterThanOrEqual(openToggleBox.y + openToggleBox.height);
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    await expect(panel.locator("[data-public-sprint-option]", { hasText: "Live Sprint" })).toBeVisible();
+    await expect(panel.locator("[data-public-priority-option]")).toHaveCount(5);
+    await expect(panel.locator('[data-public-sprint-option="scheduled"], [data-public-priority-option="**none**"], [data-assignee-option], [data-sort-option]')).toHaveCount(0);
+
+    // Outside click closes.
+    await page.locator(".public-board__project-name").click();
+    await expect(panel).toBeHidden();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    // Keyboard: Enter opens, Tab moves into the options, Escape closes and restores focus.
+    await toggle.focus();
+    await page.keyboard.press("Enter");
+    await expect(panel).toBeVisible();
+    await page.keyboard.press("Tab");
+    expect(await page.evaluate(() => !!document.activeElement?.closest("#publicFilterPanel"))).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(panel).toBeHidden();
+    expect(await focusedId(page)).toBe("publicFilterToggle");
+
+    // Select a priority by keyboard: closes, focuses the chevron, marks it active.
+    await page.keyboard.press("Enter");
+    const high = panel.locator('[data-public-priority-option="high"]');
+    await high.focus();
+    await page.keyboard.press("Enter");
+    await expect(panel).toBeHidden();
+    expect(await focusedId(page)).toBe("publicFilterToggle");
+    await expect(page).toHaveURL(/[?&]priority=high/);
+    await expect(toggle).toHaveClass(/search-filter-toggle--active/);
+    await expect(cards).toHaveCount(0);
+    await toggle.click();
+    await expect(high).toHaveClass(/is-active/);
+    await expect(high).toHaveAttribute("aria-pressed", "true");
+
+    // Sprint selection by pointer.
+    await panel.locator("[data-public-sprint-option]", { hasText: "Live Sprint" }).click();
+    await expect(panel).toBeHidden();
+    await expect(page).toHaveURL(/[?&]sprintNumber=\d+/);
+
+    // Clearing both restores the unfiltered board and the idle chevron.
+    await toggle.click();
+    await panel.locator('[data-public-sprint-option=""]').click();
+    await toggle.click();
+    await panel.locator('[data-public-priority-option=""]').click();
+    await expect(cards).toHaveCount(2);
+    await expect(page).not.toHaveURL(/priority=|sprintNumber=/);
+    await expect(toggle).not.toHaveClass(/search-filter-toggle--active/);
+    await toggle.click();
+    await expect(panel.locator('[data-public-priority-option=""]')).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Escape");
+
+    const nonPublic = urls.filter((u) => !u.startsWith(`/api/public/board/${publicSlug}`) && u !== "/api/auth/status");
+    expect(nonPublic.map((u) => new URL(u, baseUrl).pathname)).toEqual([`/api/board/${publicSlug}`]);
+    await context.close();
+  });
+}
+
+test("public search keeps focus and text across filtering and a live refresh", async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const page = await context.newPage();
+  await page.goto(`${baseUrl}/${publicSlug}`);
+  const input = page.locator("#publicSearchInput");
+  const cards = page.locator("[data-public-local-id]");
+  await expect(cards).toHaveCount(2, { timeout: 30_000 });
+  await input.click();
+  await input.pressSequentially("Second");
+  await expect(cards).toHaveCount(1);
+  expect(await focusedId(page)).toBe("publicSearchInput");
+
+  // A sprint change arrives over the stream: refresh + vocabulary reload, input untouched.
+  const inputHandle = await input.elementHandle();
+  await createSprint(await ownerClient(), publicSlug, "Refresh Sprint");
+  await expect(page.locator("#publicFilterPanel [data-public-sprint-option]", { hasText: "Refresh Sprint" })).toHaveCount(1, { timeout: 20_000 });
+  expect(await focusedId(page)).toBe("publicSearchInput");
+  expect(await inputHandle!.evaluate((el) => el.isConnected)).toBe(true);
+  await expect(input).toHaveValue("Second");
+  await expect(cards).toHaveCount(1);
+  await context.close();
+});
+
+test("member board filtering is unchanged and its handlers ignore public controls after navigation", async ({ browser }) => {
+  const outsider = apiClient(baseUrl);
+  await outsider.json("POST", "/api/auth/login", { email: OUTSIDER.email, password: OUTSIDER.password });
+  const own = await outsider.json<{ slug: string }>("POST", "/api/projects", { name: "Outsider Own Board" });
+  await outsider.json("POST", `/api/board/${own.slug}/todos`, { title: "Own story" });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  await context.addCookies(toBrowserCookies(outsider.cookies()));
+  const page = await context.newPage();
+  const urls = trackApiUrls(page);
+
+  // Member board: the regular panel with assignee, sort, No Priority, and its toast.
+  await page.goto(`${baseUrl}/${own.slug}`);
+  const memberToggle = page.locator("#searchFilterToggle");
+  const memberPanel = page.locator("#searchFilterPanel");
+  await expect(memberToggle).toBeVisible({ timeout: 30_000 });
+  await memberToggle.click();
+  await expect(memberPanel).toBeVisible();
+  await expect(memberPanel.locator("[data-assignee-option]").first()).toBeVisible();
+  await expect(memberPanel.locator("[data-sort-option]")).toHaveCount(4);
+  await expect(memberPanel.locator('[data-priority-option="**none**"]')).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await expect(memberPanel).toBeHidden();
+  await memberToggle.click();
+  await memberPanel.locator('[data-priority-option="high"]').click();
+  await expect(memberPanel).toBeHidden();
+  await expect(page).toHaveURL(/[?&]priority=high/);
+  await expect(page.locator("#toast")).toContainText("High");
+  await expect.poll(() => urls.some((u) => u.startsWith(`/api/board/${own.slug}?`) && u.includes("priority=high"))).toBe(true);
+  await expect(memberToggle).toHaveClass(/search-filter-toggle--active/);
+  await expect(page.locator("#searchClear")).toHaveCount(0);
+
+  // Client-side navigation to the public board (member listeners stay installed).
+  await page.evaluate((slug) => {
+    history.pushState({}, "", `/${slug}`);
+    dispatchEvent(new PopStateEvent("popstate"));
+  }, publicSlug);
+  await expect(page.locator(".public-board-badge")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("#searchFilterToggle, #searchFilterPanel, #searchInput")).toHaveCount(0);
+  const afterNav = urls.length;
+
+  const toggle = page.locator("#publicFilterToggle");
+  const panel = page.locator("#publicFilterPanel");
+  await toggle.click();
+  await expect(panel).toBeVisible();
+  await panel.locator('[data-public-priority-option="high"]').click();
+  await expect(panel).toBeHidden();
+  await toggle.click();
+  await page.keyboard.press("Escape");
+  await expect(panel).toBeHidden();
+  await toggle.click();
+  await page.locator(".public-board__project-name").click();
+  await expect(panel).toBeHidden();
+  await expect.poll(() => urls.slice(afterNav).some((u) => u.startsWith(`/api/public/board/${publicSlug}?`) && u.includes("priority=high"))).toBe(true);
+
+  const url = new URL(page.url());
+  expect(url.searchParams.get("priority")).toBe("high");
+  for (const memberParam of ["sprintId", "assignee", "sort"]) expect(url.searchParams.has(memberParam)).toBe(false);
+  // No member reload or member board request was triggered by public controls.
+  expect(urls.slice(afterNav).filter((u) => !u.startsWith("/api/public/") && u !== "/api/auth/status")).toEqual([]);
+  await context.close();
+});
+
+let isolatedClient = 0;
+
+/** A browser context with its own client address for the public per-IP rate limits. */
+async function isolatedContext(browser: Browser, options: BrowserContextOptions = {}): Promise<BrowserContext> {
+  isolatedClient += 1;
+  return browser.newContext({ ...options, extraHTTPHeaders: { "X-Forwarded-For": `198.51.100.${isolatedClient}` } });
+}
+
+function publicSnapshotUrls(urls: string[], slug: string): URL[] {
+  return urls.filter((u) => u.startsWith(`/api/public/board/${slug}?`)).map((u) => new URL(u, baseUrl));
+}
+
+for (const width of [320, 390, 767, 768, 1280]) {
+  test(`public Omni tags at ${width}px: browse, suggestions, pins, rails, and keyboard`, async ({ browser }) => {
+    const desktop = width >= 768;
+    const context = await isolatedContext(browser, { viewport: { width, height: 800 }, isMobile: width <= 620, hasTouch: !desktop });
+    const page = await context.newPage();
+    const urls = trackApiUrls(page);
+    await page.goto(`${baseUrl}/${tagSlug}`);
+    const input = page.locator("#publicSearchInput");
+    const viewport = page.locator("#publicOmniCandidateViewport");
+    const pinnedRail = page.locator("#publicOmniPinnedTags");
+    const mobileRail = page.locator("#publicOmniMobileTagPills");
+    const next = page.locator("#publicOmniCandidateNext");
+    const previous = page.locator("#publicOmniCandidatePrev");
+    await expect(input).toBeVisible({ timeout: 30_000 });
+    // Like the member board, the mobile row collapses while it has nothing to show.
+    await expect(page.locator("[data-public-omni]")).toHaveCount(1);
+    await expect(page.locator(".chip, [data-public-tag], #publicTagChips, [id^='omni'], [data-omni-tag]")).toHaveCount(0);
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    const expectRowBelowTopbar = async () => {
+      const rowBox = (await page.locator("[data-public-omni]").boundingBox())!;
+      const topbarBox = (await page.locator(".topbar").boundingBox())!;
+      expect(rowBox.height).toBeGreaterThan(0);
+      expect(rowBox.y).toBeGreaterThanOrEqual(topbarBox.y + topbarBox.height - 1);
+    };
+    if (desktop) await expectRowBelowTopbar();
+
+    if (desktop) {
+      // Browse: count order, subdued, overflowing with working chevrons; no mobile rail.
+      await expect(viewport.locator("[data-public-omni-tag]").first()).toHaveAttribute("data-public-omni-tag", TAG_NAMES[0]);
+      const browseNames = await viewport.locator("[data-public-omni-tag]").evaluateAll((els) => els.map((el) => el.getAttribute("data-public-omni-tag")));
+      expect(browseNames).toEqual(TAG_NAMES);
+      await expect(viewport.locator(".omni-tag-pill--browse")).toHaveCount(TAG_NAMES.length);
+      await expect(mobileRail).toBeHidden();
+      await expect(previous).toBeDisabled();
+      await expect(next).toBeEnabled();
+      await next.click();
+      await expect.poll(() => viewport.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+      await expect(previous).toBeEnabled();
+      await previous.click();
+      await expect.poll(() => viewport.evaluate((el) => el.scrollLeft)).toBe(0);
+      await expect(previous).toBeDisabled();
+      expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    } else {
+      // Mobile: no desktop rails and no empty-search Browse pills.
+      await expect(page.locator("#publicOmniCandidateRegion")).toBeHidden();
+      await expect(pinnedRail).toBeHidden();
+      await expect(mobileRail).toBeHidden();
+    }
+
+    // Typing shows suggestions immediately; picking one consumes the search with a single reload.
+    await input.click();
+    await input.pressSequentially("gam");
+    const suggestion = (desktop ? viewport : mobileRail).locator('[data-public-omni-tag="gamma-performance"]');
+    await expect(suggestion).toBeVisible();
+    await expect(suggestion).toHaveClass(/omni-tag-pill--suggestion/);
+    const beforePick = urls.length;
+    await suggestion.click();
+    await expect(input).toHaveValue("");
+    await expect(page.locator("#publicSearchClear")).toBeHidden();
+    expect(await focusedId(page)).toBe("publicSearchInput");
+    const pinRail = desktop ? pinnedRail : mobileRail;
+    await expect(pinRail.locator('[data-public-omni-clear-tag="gamma-performance"]')).toBeVisible();
+    await expect(page).toHaveURL(/[?&]tag=gamma-performance/);
+    await expectRowBelowTopbar();
+    await page.waitForTimeout(800);
+    const picked = publicSnapshotUrls(urls.slice(beforePick), tagSlug);
+    expect(picked).toHaveLength(1);
+    expect(picked[0].searchParams.getAll("tag")).toEqual(["gamma-performance"]);
+    expect(picked[0].searchParams.has("search")).toBe(false);
+    expect(publicSnapshotUrls(urls, tagSlug).some((u) => u.searchParams.get("search") === "gam")).toBe(false);
+    if (!desktop) {
+      // Mobile rail: pinned pill plus typed suggestions.
+      await input.pressSequentially("eps");
+      await expect(mobileRail.locator('[data-public-omni-tag="epsilon-localization"]')).toBeVisible();
+      await expect(mobileRail.locator('[data-public-omni-clear-tag="gamma-performance"]')).toBeVisible();
+      expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+      await page.locator("#publicSearchClear").click();
+      await expect(mobileRail.locator("[data-public-omni-tag]")).toHaveCount(0);
+    }
+
+    // Keyboard: Enter on a pill pins it (desktop Browse); Enter on × removes it and returns focus to search.
+    if (desktop) {
+      const browsePill = viewport.locator('[data-public-omni-tag="beta-design-system"]');
+      await browsePill.focus();
+      await page.keyboard.press("Enter");
+      await expect(pinnedRail.locator('[data-public-omni-clear-tag="beta-design-system"]')).toBeVisible();
+      expect(await focusedId(page)).toBe("publicSearchInput");
+      await expect(viewport.locator('[data-public-omni-tag="beta-design-system"]')).toHaveCount(0);
+    }
+    const clear = pinRail.locator('[data-public-omni-clear-tag="gamma-performance"]');
+    await clear.focus();
+    await page.keyboard.press("Enter");
+    await expect(pinRail.locator('[data-public-omni-clear-tag="gamma-performance"]')).toHaveCount(0);
+    expect(await focusedId(page)).toBe("publicSearchInput");
+    await expect(page).not.toHaveURL(/tag=gamma-performance/);
+
+    // Slice 1 filter panel still coexists with the Omni row.
+    await page.locator("#publicFilterToggle").click();
+    const panelBox = (await page.locator("#publicFilterPanel").boundingBox())!;
+    expect(contains({ x: 0, y: 0, width, height: 800 }, panelBox)).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#publicFilterPanel")).toBeHidden();
+    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    expect(urls.filter((u) => !u.startsWith(`/api/public/board/${tagSlug}`) && u !== "/api/auth/status").map((u) => new URL(u, baseUrl).pathname)).toEqual([`/api/board/${tagSlug}`]);
+    await context.close();
+  });
+}
+
+test("removing one public Omni tag keeps the other tags and filters", async ({ browser }) => {
+  const context = await isolatedContext(browser);
+  const page = await context.newPage();
+  const urls = trackApiUrls(page);
+  await page.goto(`${baseUrl}/${tagSlug}?tag=alpha-component-library&tag=beta-design-system&priority=high&search=story`);
+  const pinned = page.locator("#publicOmniPinnedTags");
+  await expect(pinned.locator("[data-public-omni-clear-tag]")).toHaveCount(2, { timeout: 30_000 });
+  await expect(page.locator("#publicSearchInput")).toHaveValue("story");
+  const before = urls.length;
+  await pinned.locator('[data-public-omni-clear-tag="alpha-component-library"]').click();
+  await expect(pinned.locator("[data-public-omni-clear-tag]")).toHaveCount(1);
+  const url = new URL(page.url());
+  expect(url.searchParams.getAll("tag")).toEqual(["beta-design-system"]);
+  expect(url.searchParams.get("priority")).toBe("high");
+  expect(url.searchParams.get("search")).toBe("story");
+  await expect.poll(() => publicSnapshotUrls(urls.slice(before), tagSlug).length).toBe(1);
+  const req = publicSnapshotUrls(urls.slice(before), tagSlug)[0];
+  expect(req.searchParams.getAll("tag")).toEqual(["beta-design-system"]);
+  expect(req.searchParams.get("priority")).toBe("high");
+  expect(req.searchParams.get("search")).toBe("story");
+  await context.close();
+});
+
+test("public Omni keeps focus and unchanged rail scroll across live refreshes", async ({ browser }) => {
+  const context = await isolatedContext(browser, { viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  await page.goto(`${baseUrl}/${tagSlug}`);
+  const viewport = page.locator("#publicOmniCandidateViewport");
+  await expect(viewport.locator("[data-public-omni-tag]")).toHaveCount(TAG_NAMES.length, { timeout: 30_000 });
+  const owner = await ownerClient();
+
+  // Counts change but the candidate order (and markup) does not: scroll and the focused pill survive.
+  await viewport.evaluate((el) => { el.scrollLeft = 120; });
+  const pill = viewport.locator('[data-public-omni-tag="delta-accessibility"]');
+  await pill.focus();
+  const marker = await pill.evaluate((el) => { (el as HTMLElement & { __mark?: number }).__mark = 1; return true; });
+  expect(marker).toBe(true);
+  await owner.json("POST", `/api/board/${tagSlug}/todos`, { title: "Refresh alpha", tags: ["alpha-component-library"] });
+  await expect(page.locator(".card__title", { hasText: "Refresh alpha" })).toHaveCount(1, { timeout: 20_000 });
+  expect(await pill.evaluate((el) => (el as HTMLElement & { __mark?: number }).__mark)).toBe(1);
+  expect(await page.evaluate(() => document.activeElement?.getAttribute("data-public-omni-tag"))).toBe("delta-accessibility");
+  expect(await viewport.evaluate((el) => el.scrollLeft)).toBe(120);
+
+  // A vocabulary change re-renders candidates but keeps focus on the same tag.
+  await owner.json("POST", `/api/board/${tagSlug}/todos`, { title: "Refresh omega", tags: ["omega-new"] });
+  await expect(viewport.locator('[data-public-omni-tag="omega-new"]')).toHaveCount(1, { timeout: 20_000 });
+  expect(await page.evaluate(() => document.activeElement?.getAttribute("data-public-omni-tag"))).toBe("delta-accessibility");
+  await context.close();
+});
+
+test("after a member Omni board, public Omni controls never reach member handlers", async ({ browser }) => {
+  const outsider = apiClient(baseUrl);
+  await outsider.json("POST", "/api/auth/login", { email: OUTSIDER.email, password: OUTSIDER.password });
+  const own = await outsider.json<{ slug: string }>("POST", "/api/projects", { name: "Outsider Omni Board" });
+  await outsider.json("POST", `/api/board/${own.slug}/todos`, { title: "Own tagged", tags: ["member-only-tag"] });
+  const context = await isolatedContext(browser, { viewport: { width: 1280, height: 800 } });
+  await context.addCookies(toBrowserCookies(outsider.cookies()));
+  const page = await context.newPage();
+  const urls = trackApiUrls(page);
+
+  // Member Omni works as before (member IDs, data-omni-* hooks, member reload).
+  await page.goto(`${baseUrl}/${own.slug}`);
+  const memberPill = page.locator('#omniCandidateViewport [data-omni-tag="member-only-tag"]');
+  await expect(memberPill).toBeVisible({ timeout: 30_000 });
+  await memberPill.click();
+  await expect(page.locator('#omniPinnedTags [data-omni-clear-tag="member-only-tag"]')).toBeVisible();
+  await expect.poll(() => urls.some((u) => u.startsWith(`/api/board/${own.slug}?`) && u.includes("tag=member-only-tag"))).toBe(true);
+
+  await page.evaluate((slug) => {
+    history.pushState({}, "", `/${slug}`);
+    dispatchEvent(new PopStateEvent("popstate"));
+  }, tagSlug);
+  await expect(page.locator(".public-board-badge")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("[id^='omni'], [data-omni-tag], [data-omni-clear-tag]")).toHaveCount(0);
+  const afterNav = urls.length;
+
+  const viewport = page.locator("#publicOmniCandidateViewport");
+  await viewport.locator('[data-public-omni-tag="alpha-component-library"]').click();
+  await expect(page.locator('#publicOmniPinnedTags [data-public-omni-clear-tag="alpha-component-library"]')).toBeVisible();
+  await page.locator("#publicSearchInput").pressSequentially("bet");
+  await viewport.locator('[data-public-omni-tag="beta-design-system"]').click();
+  await page.locator("#publicOmniCandidateNext").click();
+  await page.setViewportSize({ width: 1000, height: 800 });
+  await page.locator('#publicOmniPinnedTags [data-public-omni-clear-tag="alpha-component-library"]').click();
+  await expect.poll(() => publicSnapshotUrls(urls.slice(afterNav), tagSlug).some((u) => u.searchParams.getAll("tag").join() === "beta-design-system")).toBe(true);
+
+  const url = new URL(page.url());
+  expect(url.searchParams.getAll("tag")).toEqual(["beta-design-system"]);
+  for (const memberParam of ["sprintId", "assignee", "sort"]) expect(url.searchParams.has(memberParam)).toBe(false);
+  expect(urls.slice(afterNav).filter((u) => !u.startsWith("/api/public/") && u !== "/api/auth/status")).toEqual([]);
+  await context.close();
+});
+
+type CardLayoutReport = {
+  cards: number;
+  problems: string[];
+  longestTagShown: boolean;
+  dragHandles: number;
+};
+
+/** Geometry of every loaded card in one lane: tags inside, no content overflow, no neighbor overlap, handle placement. */
+async function measureCardLayout(page: Page, listSelector: string): Promise<CardLayoutReport> {
+  return page.locator(listSelector).evaluate((list, longest) => {
+    const problems: string[] = [];
+    const cards = Array.from(list.querySelectorAll<HTMLElement>(":scope > .card"));
+    const eps = 0.5;
+    let dragHandles = 0;
+    cards.forEach((card, i) => {
+      const name = card.querySelector(".card__title")?.textContent ?? `card ${i}`;
+      const box = card.getBoundingClientRect();
+      if (card.scrollHeight > card.clientHeight + 1) problems.push(`${name}: content ${card.scrollHeight}px > card ${card.clientHeight}px`);
+      if (card.scrollWidth > card.clientWidth + 1) problems.push(`${name}: content wider than card`);
+      for (const part of Array.from(card.querySelectorAll<HTMLElement>(".card__title-row, .card__tags .tag, .card__badges > *"))) {
+        const r = part.getBoundingClientRect();
+        if (r.left < box.left - eps || r.right > box.right + eps || r.top < box.top - eps || r.bottom > box.bottom + eps) {
+          problems.push(`${name}: ${part.className || part.tagName} "${part.textContent}" outside card`);
+        }
+      }
+      const next = cards[i + 1]?.getBoundingClientRect();
+      if (next && next.top < box.bottom - eps) problems.push(`${name}: overlaps the next card by ${Math.round(box.bottom - next.top)}px`);
+      const handle = card.querySelector<HTMLElement>(".card__drag-handle");
+      if (handle) {
+        dragHandles += 1;
+        const h = handle.getBoundingClientRect();
+        const inTopRight = h.right <= box.right + eps && h.top >= box.top - eps && h.left >= box.left + box.width / 2 && h.bottom <= box.top + 48;
+        if (!inTopRight || h.width === 0) problems.push(`${name}: drag handle not in the card's top-right corner`);
+      }
+    });
+    const longestTagShown = Array.from(list.querySelectorAll(".card__tags .tag")).some((tag) => tag.textContent === longest);
+    return { cards: cards.length, problems, longestTagShown, dragHandles };
+  }, LONGEST_TAG);
+}
+
+let cardOwnerCookies: Cookie[] | null = null;
+
+for (const width of [320, 390, 620, 621, 767, 1280]) {
+  for (const audience of ["public", "member"] as const) {
+    test(`${audience} story cards at ${width}px keep tags inside non-overlapping cards and still load more`, async ({ browser }) => {
+      const mobileLane = width <= 620;
+      const context = await isolatedContext(browser, { viewport: { width, height: 740 }, isMobile: mobileLane, hasTouch: width < 768 });
+      if (audience === "member") {
+        cardOwnerCookies ??= (await ownerClient()).cookies();
+        await context.addCookies(toBrowserCookies(cardOwnerCookies));
+      }
+      const page = await context.newPage();
+      await page.goto(`${baseUrl}/${cardSlug}`);
+      const listSelector = audience === "public" ? '[data-public-list="backlog"]' : "#list_backlog";
+      const cardSelector = audience === "public" ? "[data-public-local-id]" : "[data-todo-id]";
+      const list = page.locator(listSelector);
+      await expect(list.locator(cardSelector)).toHaveCount(20, { timeout: 30_000 });
+      if (mobileLane) await expect(page.locator(`.col--mobile-active ${listSelector}`)).toHaveCount(1);
+
+      const first = await measureCardLayout(page, listSelector);
+      expect(first.problems).toEqual([]);
+      expect(first.longestTagShown).toBe(true);
+      expect(first.dragHandles).toBe(audience === "member" ? 20 : 0);
+      expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+
+      // Scroll the lane to its end, then load the next page with the control this width shows.
+      await list.evaluate((el) => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event("scroll")); });
+      if (mobileLane) {
+        expect(await list.evaluate((el) => el.scrollHeight > el.clientHeight && el.scrollTop > 0)).toBe(true);
+        const loadMore = audience === "public"
+          ? page.locator('.col--mobile-active .col__load-more--mobile[data-public-load-more="backlog"]')
+          : page.locator('.col--mobile-active [data-load-more="backlog"].visible .col__load-more--mobile');
+        await expect(loadMore).toBeVisible();
+        await loadMore.click();
+      } else {
+        const loadMore = audience === "public"
+          ? page.locator('.col__load-more--desktop[data-public-load-more="backlog"]')
+          : page.locator('[data-load-more="backlog"] .col__load-more--desktop');
+        await loadMore.scrollIntoViewIfNeeded();
+        await loadMore.click();
+      }
+      await expect(list.locator(cardSelector)).toHaveCount(CARD_LAYOUT_STORIES, { timeout: 20_000 });
+
+      const all = await measureCardLayout(page, listSelector);
+      expect(all.problems).toEqual([]);
+      expect(all.dragHandles).toBe(audience === "member" ? CARD_LAYOUT_STORIES : 0);
+      expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+      await context.close();
+    });
+  }
+}
 
 test("a previously visited public route uses the cached app shell and reports live data unavailable", async ({ page, context }) => {
   await page.goto(`${baseUrl}/${publicSlug}`);

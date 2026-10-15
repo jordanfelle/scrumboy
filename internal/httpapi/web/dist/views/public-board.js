@@ -15,10 +15,12 @@ import { getAuthStatusAvailable, getMarkdownNotesEnabled, getMermaidNotesEnabled
 import { signInPath } from '../app-home.js';
 import { setBoard, setBoardAccess, setProjectId } from '../state/mutations.js';
 import { PUBLIC_BOARD_ACCESS } from '../state/board-access.js';
-import { fetchPublicBoardSnapshot, fetchPublicLanePage, fetchPublicSprints, isPublicAbort, isPublicNotFound, normalizePublicQuery, publicBoardEventsPath, PublicBoardApiError, PUBLIC_DEFAULT_PAGE_SIZE, PUBLIC_MAX_PAGE_SIZE, samePublicQuery, EMPTY_PUBLIC_QUERY, } from '../public-board-api.js';
-import { buildPublicBoardHtml, buildPublicColumnsHtml, buildPublicFilterErrorHtml, buildPublicFiltersHtml, buildPublicMobileTabsHtml, buildPublicUnavailableHtml, isPublicQueryActive, publicPriorityMap, showPublicPoints, } from './public-board-rendering.js';
+import { fetchPublicBoardSnapshot, fetchPublicLanePage, fetchPublicSprints, isPublicAbort, isPublicNotFound, normalizePublicQuery, publicBoardEventsPath, PublicBoardApiError, PUBLIC_DEFAULT_PAGE_SIZE, PUBLIC_MAX_PAGE_SIZE, PUBLIC_MAX_TAG_FILTERS, samePublicQuery, EMPTY_PUBLIC_QUERY, } from '../public-board-api.js';
+import { buildPublicBoardHtml, buildPublicColumnsHtml, buildPublicFilterErrorHtml, buildPublicFilterSectionsHtml, buildPublicMobileTabsHtml, buildPublicUnavailableHtml, isPublicPanelFilterActive, isPublicQueryActive, publicPriorityMap, PUBLIC_FILTER_PANEL_ID, PUBLIC_FILTER_TOGGLE_ID, PUBLIC_PRIORITY_OPTION_ATTR, PUBLIC_SPRINT_OPTION_ATTR, showPublicPoints, } from './public-board-rendering.js';
 import { closePublicTodo, getOpenPublicTodoLocalId, openPublicTodo } from '../dialogs/public-todo.js';
 import { SseConnectionManager } from '../core/sse-client.js';
+import { closeFilterPopover, openFilterPopover, positionFilterPopover } from './filter-popover.js';
+import { bindPublicOmni } from './public-omni.js';
 /**
  * Public stream policy. The server sends comment-only heartbeats (~15s) that
  * never reach onmessage, so the data-ping watchdog is disabled. Reconnects use
@@ -127,6 +129,9 @@ function teardown(s) {
     s.sprintsController?.abort();
     s.sprintsController = null;
     s.refreshQueued = false;
+    s.listeners.abort();
+    s.pageScope.abort();
+    s.omni = null;
 }
 /** Ends any public board view and its stream. Safe to call repeatedly. */
 export function stopPublicBoard() {
@@ -166,8 +171,7 @@ function renderBoardRegions(s) {
     const view = viewModel(s);
     const boardEl = app.querySelector('[data-public-board]');
     const tabsEl = app.querySelector('#publicMobileTabs');
-    const filtersEl = app.querySelector('.public-board-filters');
-    if (!boardEl || !tabsEl || !filtersEl) {
+    if (!boardEl || !tabsEl || !s.omni) {
         renderFull(s);
         return;
     }
@@ -183,12 +187,206 @@ function renderBoardRegions(s) {
         tabsEl.innerHTML = tabs;
         s.rendered.tabs = tabs;
     }
-    const filters = buildPublicFiltersHtml(view);
-    if (filters !== s.rendered.filters) {
-        filtersEl.outerHTML = filters;
-        s.rendered.filters = filters;
-    }
+    s.omni.render();
+    syncFilterPanel(s);
     syncNoResults(s);
+}
+// ---- Omni tags ----
+function searchInputEl() {
+    return app.querySelector('#publicSearchInput');
+}
+function omniState(s) {
+    return { tags: s.snapshot.tags, selected: s.query.tags, input: searchInputEl()?.value ?? s.query.search };
+}
+function cancelPendingSearch(s) {
+    if (s.searchTimer !== null)
+        clearTimeout(s.searchTimer);
+    s.searchTimer = null;
+}
+/**
+ * Pins a suggested tag: only a published tag (canonical name), not already
+ * selected, within the public tag limit. Consumes the search term and commits
+ * search and tags together, so exactly one snapshot reload runs even when a
+ * debounced search was still pending.
+ */
+function addTag(s, raw) {
+    if (!isCurrent(s))
+        return;
+    const key = raw.toLocaleLowerCase();
+    const tag = s.snapshot.tags.find((candidate) => candidate.name.toLocaleLowerCase() === key);
+    if (!tag || s.query.tags.length >= PUBLIC_MAX_TAG_FILTERS)
+        return;
+    if (s.query.tags.some((existing) => existing.toLocaleLowerCase() === key))
+        return;
+    cancelPendingSearch(s);
+    const input = searchInputEl();
+    if (input)
+        input.value = '';
+    app.querySelector('#publicSearchClear')?.setAttribute('hidden', '');
+    setQuery(s, { search: '', tags: [...s.query.tags, tag.name] });
+    input?.focus();
+}
+/**
+ * Unpins one selected tag, keeping every other filter. Any typed-but-pending
+ * search is committed in the same query change (one reload, not two).
+ */
+function removeTag(s, raw) {
+    if (!isCurrent(s))
+        return;
+    const key = raw.toLocaleLowerCase();
+    if (!s.query.tags.some((existing) => existing.toLocaleLowerCase() === key))
+        return;
+    const input = searchInputEl();
+    const pending = s.searchTimer !== null;
+    cancelPendingSearch(s);
+    setQuery(s, {
+        ...(pending && input ? { search: input.value } : {}),
+        tags: s.query.tags.filter((existing) => existing.toLocaleLowerCase() !== key),
+    });
+    input?.focus();
+}
+// ---- Filter popover (sprint / priority) ----
+function filterPanelElements() {
+    const toggle = app.querySelector(`#${PUBLIC_FILTER_TOGGLE_ID}`);
+    const panel = app.querySelector(`#${PUBLIC_FILTER_PANEL_ID}`);
+    return toggle && panel ? { toggle, panel } : null;
+}
+const PANEL_OPTION_ATTRS = [PUBLIC_SPRINT_OPTION_ATTR, PUBLIC_PRIORITY_OPTION_ATTR];
+function focusedPanelOption(panel) {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || !panel.contains(active))
+        return null;
+    for (const attr of PANEL_OPTION_ATTRS) {
+        if (active.hasAttribute(attr))
+            return { attr, value: active.getAttribute(attr) ?? '' };
+    }
+    return null;
+}
+/**
+ * Brings the popover's sections, selection state, and toggle in line with the
+ * session (query, sprint vocabulary, priorities) without touching the search
+ * input or the rest of the topbar. An open popover stays open; a focused
+ * option keeps focus while it still exists.
+ */
+function syncFilterPanel(s) {
+    if (!isCurrent(s))
+        return;
+    const elements = filterPanelElements();
+    if (!elements)
+        return;
+    const { toggle, panel } = elements;
+    const sections = buildPublicFilterSectionsHtml(s);
+    const hadFocus = panel.contains(document.activeElement) || toggle === document.activeElement;
+    if (sections !== s.rendered.panel) {
+        const focused = focusedPanelOption(panel);
+        panel.innerHTML = sections;
+        s.rendered.panel = sections;
+        if (focused) {
+            const same = Array.from(panel.querySelectorAll(`[${focused.attr}]`))
+                .find((el) => el.getAttribute(focused.attr) === focused.value);
+            (same ?? toggle).focus();
+        }
+    }
+    const empty = sections === '';
+    if (empty && !panel.hidden)
+        closeFilterPopover(panel, toggle);
+    toggle.hidden = empty;
+    toggle.classList.toggle('search-filter-toggle--active', isPublicPanelFilterActive(s.query));
+    if (empty && hadFocus)
+        app.querySelector('#publicSearchInput')?.focus();
+    if (!panel.hidden)
+        positionFilterPopover(panel, toggle);
+}
+/** Keeps the search input and its clear button in line with s.query after URL navigation. */
+function syncSearchInput(s) {
+    const input = app.querySelector('#publicSearchInput');
+    if (!input)
+        return;
+    if (normalizePublicQuery({ search: input.value }).search !== s.query.search)
+        input.value = s.query.search;
+    app.querySelector('#publicSearchClear')?.toggleAttribute('hidden', input.value.trim() === '');
+}
+/** Only values the panel offers are accepted: All or a known sprint number. */
+function parsePanelSprint(s, raw) {
+    if (raw === '')
+        return null;
+    if (!/^\d{1,9}$/.test(raw))
+        return undefined;
+    const n = Number(raw);
+    return s.sprints.some((sprint) => sprint.number === n) ? n : undefined;
+}
+/** Only values the panel offers are accepted: All or a published priority key. */
+function parsePanelPriority(s, raw) {
+    if (raw === '')
+        return null;
+    return s.snapshot.priorities.some((priority) => priority.key === raw) ? raw : undefined;
+}
+/** Handles clicks on the toggle and on public options; returns true when consumed. */
+function handleFilterPanelClick(s, target) {
+    const elements = filterPanelElements();
+    if (!elements)
+        return false;
+    const { toggle, panel } = elements;
+    if (toggle.contains(target)) {
+        if (panel.hidden)
+            openFilterPopover(panel, toggle);
+        else
+            closeFilterPopover(panel, toggle);
+        return true;
+    }
+    if (!panel.contains(target))
+        return false;
+    const sprintEl = target.closest(`[${PUBLIC_SPRINT_OPTION_ATTR}]`);
+    const priorityEl = target.closest(`[${PUBLIC_PRIORITY_OPTION_ATTR}]`);
+    let next = null;
+    if (sprintEl) {
+        const sprintNumber = parsePanelSprint(s, sprintEl.getAttribute(PUBLIC_SPRINT_OPTION_ATTR) ?? '');
+        if (sprintNumber !== undefined)
+            next = { sprintNumber };
+    }
+    else if (priorityEl) {
+        const priority = parsePanelPriority(s, priorityEl.getAttribute(PUBLIC_PRIORITY_OPTION_ATTR) ?? '');
+        if (priority !== undefined)
+            next = { priority };
+    }
+    if (!next)
+        return true;
+    closeFilterPopover(panel, toggle);
+    toggle.focus();
+    setQuery(s, next);
+    return true;
+}
+/** Outside click, Escape, and resize for the popover, scoped to this session. */
+function bindSessionListeners(s) {
+    const { signal } = s.listeners;
+    document.addEventListener('click', (event) => {
+        if (!isCurrent(s))
+            return;
+        const elements = filterPanelElements();
+        if (!elements || elements.panel.hidden)
+            return;
+        const target = event.target;
+        if (target instanceof Node && (elements.panel.contains(target) || elements.toggle.contains(target)))
+            return;
+        closeFilterPopover(elements.panel, elements.toggle);
+    }, { signal });
+    document.addEventListener('keydown', (event) => {
+        if (!isCurrent(s) || event.key !== 'Escape')
+            return;
+        const elements = filterPanelElements();
+        if (!elements || elements.panel.hidden)
+            return;
+        event.preventDefault();
+        closeFilterPopover(elements.panel, elements.toggle);
+        elements.toggle.focus();
+    }, { signal });
+    window.addEventListener('resize', () => {
+        if (!isCurrent(s))
+            return;
+        const elements = filterPanelElements();
+        if (elements && !elements.panel.hidden)
+            positionFilterPopover(elements.panel, elements.toggle);
+    }, { signal });
 }
 function syncNoResults(s) {
     const container = app.querySelector('[data-public-board-page] .container');
@@ -227,8 +425,25 @@ function renderFull(s) {
             boardEl.innerHTML = columns;
         syncNoResults(s);
     }
-    s.rendered = { filters: buildPublicFiltersHtml(view), columns, tabs: buildPublicMobileTabsHtml(view) };
+    s.rendered = {
+        columns,
+        tabs: buildPublicMobileTabsHtml(view),
+        panel: buildPublicFilterSectionsHtml(view),
+    };
     bindPageHandlers(s);
+    // Page-scoped Omni controller: its listeners and observer end with this page.
+    s.pageScope.abort();
+    s.pageScope = new AbortController();
+    const omniRoot = app.querySelector('[data-public-omni]');
+    s.omni = omniRoot
+        ? bindPublicOmni({
+            root: omniRoot,
+            signal: s.pageScope.signal,
+            getState: () => omniState(s),
+            onAdd: (tag) => addTag(s, tag),
+            onRemove: (tag) => removeTag(s, tag),
+        })
+        : null;
 }
 function bindPageHandlers(s) {
     const page = app.querySelector('[data-public-board-page]');
@@ -239,6 +454,8 @@ function bindPageHandlers(s) {
         if (!isCurrent(s))
             return;
         const target = event.target;
+        if (handleFilterPanelClick(s, target))
+            return;
         const card = target.closest('[data-public-local-id]');
         if (card) {
             const localId = Number(card.getAttribute('data-public-local-id'));
@@ -255,11 +472,6 @@ function bindPageHandlers(s) {
             void loadMore(s, more.getAttribute('data-public-load-more') ?? '');
             return;
         }
-        const tag = target.closest('[data-public-tag]');
-        if (tag) {
-            toggleTag(s, tag.getAttribute('data-public-tag') ?? '');
-            return;
-        }
         const tab = target.closest('[data-public-tab]');
         if (tab) {
             s.activeMobileTab = tab.getAttribute('data-public-tab') ?? s.activeMobileTab;
@@ -270,24 +482,16 @@ function bindPageHandlers(s) {
             const input = page.querySelector('#publicSearchInput');
             if (input)
                 input.value = '';
+            page.querySelector('#publicSearchClear')?.setAttribute('hidden', '');
+            cancelPendingSearch(s);
             setQuery(s, { ...s.query, search: '' });
+            // The committed query may be unchanged (search still debouncing), so refresh suggestions directly.
+            s.omni?.render();
             input?.focus();
             return;
         }
         if (target.closest('#publicSignInBtn')) {
             startSignIn();
-        }
-    });
-    page.addEventListener('change', (event) => {
-        if (!isCurrent(s))
-            return;
-        const target = event.target;
-        if (target.id === 'publicSprintFilter') {
-            const n = Number(target.value);
-            setQuery(s, { ...s.query, sprintNumber: Number.isSafeInteger(n) && n > 0 ? n : null });
-        }
-        else if (target.id === 'publicPriorityFilter') {
-            setQuery(s, { ...s.query, priority: target.value || null });
         }
     });
     page.addEventListener('input', (event) => {
@@ -297,6 +501,8 @@ function bindPageHandlers(s) {
         if (target.id !== 'publicSearchInput')
             return;
         page.querySelector('#publicSearchClear')?.toggleAttribute('hidden', target.value.trim() === '');
+        // Suggestions follow the live input immediately; the query commits after the debounce.
+        s.omni?.render();
         if (s.searchTimer !== null)
             clearTimeout(s.searchTimer);
         s.searchTimer = setTimeout(() => {
@@ -315,15 +521,6 @@ function startSignIn() {
     window.location.assign(signInPath(window.location.pathname + window.location.search));
 }
 // ---- Filters, refresh, pagination ----
-function toggleTag(s, tag) {
-    if (!tag) {
-        setQuery(s, { ...s.query, tags: [] });
-        return;
-    }
-    const key = tag.toLocaleLowerCase();
-    const has = s.query.tags.some((existing) => existing.toLocaleLowerCase() === key);
-    setQuery(s, { ...s.query, tags: has ? s.query.tags.filter((existing) => existing.toLocaleLowerCase() !== key) : [...s.query.tags, tag] });
-}
 function setQuery(s, next) {
     if (!isCurrent(s))
         return;
@@ -332,6 +529,8 @@ function setQuery(s, next) {
         return;
     s.query = query;
     writePublicQueryToUrl(query);
+    s.omni?.render();
+    syncFilterPanel(s);
     void reloadSnapshot(s, 'filter');
 }
 function loadedPageSize(s) {
@@ -379,7 +578,8 @@ async function reloadSnapshot(s, kind) {
             // A filter the board no longer supports: fall back to the unfiltered view.
             s.query = EMPTY_PUBLIC_QUERY;
             writePublicQueryToUrl(s.query);
-            renderFull(s);
+            syncSearchInput(s);
+            renderBoardRegions(s);
             void reloadSnapshot(s, 'filter');
             return;
         }
@@ -699,11 +899,15 @@ export async function resolvePublicBoard(input) {
         sprintsSeq: 0,
         sprintsController: null,
         filterError: false,
-        rendered: { filters: '', columns: '', tabs: '' },
+        listeners: new AbortController(),
+        pageScope: new AbortController(),
+        omni: null,
+        rendered: { columns: '', tabs: '', panel: '' },
     };
     applySnapshot(s, snapshot);
     session = s;
     renderFull(s);
+    bindSessionListeners(s);
     connectStream(s);
     syncSprintVocabulary(s, 'initial');
     const localId = parseLocalIdSegment(input.openTodoSegment);
@@ -718,8 +922,13 @@ export async function applyPublicBoardRoute(input) {
         return;
     const query = readPublicQueryFromUrl();
     if (!samePublicQuery(query, s.query)) {
+        // The URL wins over a pending keystroke; the topbar and input are kept.
+        if (s.searchTimer !== null)
+            clearTimeout(s.searchTimer);
+        s.searchTimer = null;
         s.query = query;
-        renderFull(s);
+        syncSearchInput(s);
+        renderBoardRegions(s);
         void reloadSnapshot(s, 'filter');
     }
     const localId = parseLocalIdSegment(input.openTodoSegment);

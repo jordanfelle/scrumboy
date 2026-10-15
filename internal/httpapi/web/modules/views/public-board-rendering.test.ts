@@ -11,7 +11,9 @@ vi.mock('../i18n/index.js', async (importOriginal) => ({
 import { normalizePublicBoardSnapshot, EMPTY_PUBLIC_QUERY } from '../public-board-api.js';
 import {
   buildPublicBoardHtml,
+  buildPublicOmniContent,
   buildPublicUnavailableHtml,
+  comparePublicBrowseTags,
   type PublicBoardViewModel,
   type PublicLaneState,
 } from './public-board-rendering.js';
@@ -66,23 +68,86 @@ describe('public board rendering', () => {
     expect(tagStyle).toContain('background: #00ff0020');
     expect(tagStyle).toContain('color: var(--text)');
     expect(tagStyle).not.toMatch(/(^|[^-])color: #00ff00/);
-    // Priority badges keep accent-colored text.
-    const priorityStyle = root.querySelector('.card__priority')!.getAttribute('style') ?? '';
-    expect(priorityStyle).toContain('color: #ff0000');
+    // Priority badges keep accent-colored text (shared member style string).
+    const priority = root.querySelector<HTMLElement>('.card__priority')!;
+    expect(priority.getAttribute('style')).toBe('border-color:#ff0000; background:#ff000020; color:#ff0000;');
+    expect(priority.style.color).toBe('#ff0000');
   });
 
-  it('renders colored, toggleable tag filter chips and drops unsafe chip colors', () => {
-    const base = view();
-    const snapshot = { ...base.snapshot, tags: [...base.snapshot.tags, { name: 'blue', color: '#3b82f6', activeCount: 2 }] };
-    const root = render({ ...base, snapshot, query: { ...EMPTY_PUBLIC_QUERY, tags: ['blue'] } });
-    const blue = root.querySelector<HTMLButtonElement>('.chip[data-public-tag="blue"]')!;
-    expect(blue.classList.contains('chip--active')).toBe(true);
-    expect(blue.getAttribute('aria-pressed')).toBe('true');
-    expect(blue.getAttribute('style')).toContain('border-color: #3b82f6');
-    expect(blue.getAttribute('style')).not.toMatch(/(^|[^-])color:/);
-    const unsafe = root.querySelector<HTMLButtonElement>(`.chip[data-public-tag]:not([data-public-tag="blue"]):not([data-public-tag=""])`)!;
-    expect(unsafe.getAttribute('aria-pressed')).toBe('false');
-    expect(unsafe.hasAttribute('style')).toBe(false);
+  it('renders a stable Omni shell with public-only ids and no static chips or All chip', () => {
+    const root = render(view());
+    const row = root.querySelector('.container > [data-public-omni].filters--omni')!;
+    expect(row).not.toBeNull();
+    for (const id of ['publicOmniPinnedTags', 'publicOmniCandidateRegion', 'publicOmniCandidatePrev', 'publicOmniCandidateViewport', 'publicOmniCandidateNext', 'publicOmniMobileTagPills']) {
+      expect(row.querySelector(`#${id}`), id).not.toBeNull();
+    }
+    expect(root.querySelector('[id^="omni"], [data-omni-tag], [data-omni-clear-tag], .chip, [data-public-tag], #publicTagChips, .public-board-filters')).toBeNull();
+  });
+
+  it('escapes hostile tag names, drops unsafe colors, and keeps theme text for contrast', () => {
+    const tags = [
+      { name: hostile, color: 'url(evil)', activeCount: 3 },
+      { name: 'blue', color: '#3b82f6', activeCount: 2 },
+    ];
+    const root = document.createElement('div');
+    const content = buildPublicOmniContent({ tags, selected: ['blue'], input: '' });
+    root.innerHTML = content.pinnedHtml + content.candidatesHtml;
+    expect(root.querySelector('img, script')).toBeNull();
+    const browse = root.querySelector<HTMLButtonElement>('[data-public-omni-tag]')!;
+    expect(browse.getAttribute('data-public-omni-tag')).toBe(hostile);
+    expect(browse.textContent).toBe(hostile);
+    expect(browse.classList.contains('omni-tag-pill--browse')).toBe(true);
+    expect(browse.hasAttribute('style')).toBe(false);
+    expect(content.candidatesHtml).not.toContain('url(evil)');
+    const pinned = root.querySelector('.omni-tag-pill--applied')!;
+    const style = pinned.getAttribute('style') ?? '';
+    expect(style).toContain('border-color:#3b82f6');
+    expect(style).toContain('background:#3b82f620');
+    expect(style).toContain('color:var(--text)');
+    expect(style).not.toMatch(/(^|[^-])color:#3b82f6/);
+    expect(pinned.querySelector('[data-public-omni-clear-tag="blue"]')?.getAttribute('aria-label')).toBe('board.filters.clearTag');
+    // Typed suggestions use the strong tint, still with theme text.
+    const typed = buildPublicOmniContent({ tags, selected: [], input: 'blu' });
+    expect(typed.candidatesHtml).toContain('omni-tag-pill--suggestion');
+    expect(typed.candidatesHtml).toContain('color:var(--text)');
+  });
+
+  it('orders public Browse by active count, then case-insensitive name, without recency', () => {
+    const tags = [
+      { name: 'zeta', color: null, activeCount: 2 },
+      { name: 'Alpha', color: null, activeCount: 2 },
+      { name: 'beta', color: null, activeCount: 5 },
+      { name: 'idle', color: null, activeCount: 0 },
+      { name: 'alpha2', color: null, activeCount: 1 },
+    ];
+    const root = document.createElement('div');
+    root.innerHTML = buildPublicOmniContent({ tags, selected: [], input: '' }).candidatesHtml;
+    expect(Array.from(root.querySelectorAll('[data-public-omni-tag]')).map((el) => el.textContent)).toEqual(['beta', 'Alpha', 'zeta', 'alpha2']);
+    expect([...tags].sort(comparePublicBrowseTags).map((tag) => tag.name)).toEqual(['beta', 'Alpha', 'zeta', 'alpha2', 'idle']);
+    // Typed: exact, prefix, substring; selected tags excluded.
+    root.innerHTML = buildPublicOmniContent({ tags, selected: ['alpha2'], input: 'ALPHA' }).candidatesHtml;
+    expect(Array.from(root.querySelectorAll('[data-public-omni-tag]')).map((el) => el.textContent)).toEqual(['Alpha']);
+  });
+
+  it('keeps removed URL tags removable and stops offering tags at the ten-tag limit', () => {
+    const tags = Array.from({ length: 12 }, (_, i) => ({ name: `t${i}`, color: null, activeCount: 1 }));
+    const gone = buildPublicOmniContent({ tags, selected: ['Vanished'], input: '' });
+    expect(gone.pinnedHtml).toContain('data-public-omni-clear-tag="Vanished"');
+    expect(gone.hasPins).toBe(true);
+    const full = buildPublicOmniContent({ tags, selected: tags.slice(0, 10).map((tag) => tag.name), input: '' });
+    expect(full.candidatesHtml).toBe('');
+    expect(buildPublicOmniContent({ tags, selected: tags.slice(0, 10).map((tag) => tag.name), input: 't1' }).candidatesHtml).toBe('');
+    expect(buildPublicOmniContent({ tags, selected: tags.slice(0, 9).map((tag) => tag.name), input: '' }).candidatesHtml).toContain('t10');
+  });
+
+  it('mobile pills show pinned tags plus typed suggestions, never empty-search Browse', () => {
+    const tags = [{ name: 'api', color: null, activeCount: 1 }, { name: 'apex', color: null, activeCount: 1 }];
+    const browse = buildPublicOmniContent({ tags, selected: ['api'], input: '' });
+    expect(browse.mobileHtml).toBe(browse.pinnedHtml);
+    expect(browse.candidatesHtml).toContain('apex');
+    const typed = buildPublicOmniContent({ tags, selected: ['api'], input: 'ap' });
+    expect(typed.mobileHtml).toBe(typed.pinnedHtml + typed.candidatesHtml);
+    expect(typed.mobileHtml).toContain('data-public-omni-tag="apex"');
   });
 
   it('renders cards as keyboard-focusable read-only buttons with no member or drag hooks', () => {
@@ -120,20 +185,67 @@ describe('public board rendering', () => {
     expect(topbar.querySelector('.public-board-badge')).not.toBeNull();
     expect(topbar.querySelector('#publicSearchInput')).not.toBeNull();
     expect(topbar.querySelector('#publicSignInBtn')).not.toBeNull();
-    // Mobile hides sprint/priority via CSS only; the selects stay in the DOM.
+    // Mobile keeps the sprint/priority popover inside the search control.
     const mobile = render(view({ isMobile: true }));
-    expect(mobile.querySelector('.public-board-filter #publicSprintFilter')).not.toBeNull();
-    expect(mobile.querySelector('.public-board-filter #publicPriorityFilter')).not.toBeNull();
+    const wrapper = mobile.querySelector('.topbar .search-input-wrapper')!;
+    expect(wrapper.querySelector('#publicSearchInput')).not.toBeNull();
+    expect(wrapper.querySelector<HTMLButtonElement>('#publicFilterToggle')?.hidden).toBe(false);
+    expect(wrapper.querySelector<HTMLElement>('#publicFilterPanel')?.hidden).toBe(true);
     expect(mobile.querySelector('.public-board-badge')).not.toBeNull();
   });
 
-  it('offers only supported filters: text, tags, sprint number, priority', () => {
+  it('offers only supported filters: text, tags, numbered sprints, named priorities', () => {
     const root = render(view());
     expect(root.querySelector('#publicSearchInput')).not.toBeNull();
-    expect(root.querySelector('[data-public-tag=""]')).not.toBeNull();
-    expect((root.querySelector('#publicSprintFilter option[value="2"]') as HTMLOptionElement).textContent).toBe(hostile);
-    expect(root.querySelector('#publicPriorityFilter')).not.toBeNull();
-    expect(root.querySelector('[data-sort-option], [data-assignee-option], #assigneeFilter')).toBeNull();
+    expect(root.querySelector('[data-public-omni]')).not.toBeNull();
+    const sprintOptions = Array.from(root.querySelectorAll('[data-public-sprint-option]'));
+    expect(sprintOptions.map((o) => o.getAttribute('data-public-sprint-option'))).toEqual(['', '2']);
+    expect(sprintOptions[1].textContent).toBe(hostile);
+    const priorityOptions = Array.from(root.querySelectorAll('[data-public-priority-option]'));
+    expect(priorityOptions.map((o) => o.getAttribute('data-public-priority-option'))).toEqual(['', 'p"x']);
+    expect(priorityOptions[1].textContent).toBe(hostile);
+    expect(priorityOptions[1].getAttribute('style')).toContain('border-color: #ff0000');
+    // No member-only values, controls, or the member panel's hooks.
+    expect(root.innerHTML).not.toContain('scheduled');
+    expect(root.innerHTML).not.toContain('**none**');
+    expect(root.querySelector([
+      '[data-sort-option]', '[data-assignee-option]', '[data-sprint-option]', '[data-priority-option]',
+      '#assigneeFilter', '#searchFilterToggle', '#searchFilterPanel', '#searchInput', 'select',
+      '#publicSprintFilter', '#publicPriorityFilter', '.public-board-filter',
+    ].join(', '))).toBeNull();
+  });
+
+  it('marks the selected sprint and priority as active and pulses the toggle', () => {
+    const idle = render(view());
+    expect(idle.querySelector('#publicFilterToggle')?.classList.contains('search-filter-toggle--active')).toBe(false);
+    expect(idle.querySelector('[data-public-sprint-option=""]')?.getAttribute('aria-pressed')).toBe('true');
+
+    const root = render(view({ query: { ...EMPTY_PUBLIC_QUERY, sprintNumber: 2, priority: 'p"x' } }));
+    const toggle = root.querySelector('#publicFilterToggle')!;
+    expect(toggle.classList.contains('search-filter-toggle--active')).toBe(true);
+    expect(toggle.getAttribute('aria-controls')).toBe('publicFilterPanel');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    const sprint = root.querySelector('[data-public-sprint-option="2"]')!;
+    expect(sprint.classList.contains('is-active')).toBe(true);
+    expect(sprint.classList.contains('search-filter-option--active-sprint')).toBe(true);
+    expect(sprint.getAttribute('aria-pressed')).toBe('true');
+    expect(root.querySelector('[data-public-sprint-option=""]')?.getAttribute('aria-pressed')).toBe('false');
+    const priority = Array.from(root.querySelectorAll('[data-public-priority-option]')).find((o) => o.getAttribute('data-public-priority-option') === 'p"x')!;
+    expect(priority.classList.contains('is-active')).toBe(true);
+    expect(priority.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('omits empty sections and hides the toggle when no sprint or priority filter applies', () => {
+    const base = view();
+    const noSprints = render({ ...base, sprints: [] });
+    expect(noSprints.querySelector('[data-public-sprint-section]')).toBeNull();
+    expect(noSprints.querySelector('[data-public-priority-section]')).not.toBeNull();
+
+    const disabled = { ...base.snapshot, project: { ...base.snapshot.project, sprintsEnabled: false }, priorities: [] };
+    const none = render({ ...base, snapshot: disabled });
+    expect(none.querySelector('[data-public-sprint-option], [data-public-priority-option]')).toBeNull();
+    expect(none.querySelector<HTMLButtonElement>('#publicFilterToggle')?.hidden).toBe(true);
+    expect(none.querySelector('#publicSearchInput')).not.toBeNull();
   });
 
   it('renders loading, error, exhausted, and empty states', () => {
@@ -170,13 +282,15 @@ describe('public board rendering', () => {
     expect(root.querySelector('[data-public-local-id], [data-public-board]')).toBeNull();
   });
 
-  it('mobile hides badge and sprint/priority filters only on the public board page', () => {
+  it('mobile hides only the badge, keeping search and its filter popover, on the public board page', () => {
     const css = readFileSync(resolve(process.cwd(), 'styles.css'), 'utf8');
     const section = css.slice(css.indexOf('PUBLIC READ-ONLY BOARD'));
     const media = section.slice(section.indexOf('@media (max-width: 620px)'));
-    expect(media).toMatch(/\.page--public-board \.public-board-badge,\s*\.page--public-board \.public-board-filter\s*\{\s*display: none;/);
-    // Tags, search, and lane tabs are never hidden on the public board.
-    expect(media).not.toMatch(/(chips|search-input|mobile-tab)[^{}]*\{[^}]*display:\s*none/);
+    expect(media).toMatch(/\.page--public-board \.public-board-badge\s*\{\s*display: none;/);
+    // Tags, search, the filter popover, and lane tabs are never hidden on the public board.
+    expect(media).not.toMatch(/(chips|search-input|search-filter|mobile-tab)[^{}]*\{[^}]*display:\s*none/);
+    // The removed dropdown and static tag-row styles are gone.
+    expect(css).not.toMatch(/public-board-filter|public-board-sr-only/);
     // Every public mobile rule is scoped to the public page; nothing can reach
     // the member board's topbar or filters (.filters, .brand, #sprintFilter...).
     const selectors = Array.from(media.matchAll(/([^{}]+)\{[^{}]*\}/g)).map((m) => m[1].replace(/\/\*[\s\S]*?\*\//g, '').trim());
@@ -187,9 +301,16 @@ describe('public board rendering', () => {
     // Public-only classes are emitted only by the public renderer.
     const memberSource = readFileSync(resolve(process.cwd(), 'modules/views/board-rendering.ts'), 'utf8')
       + readFileSync(resolve(process.cwd(), 'modules/views/board.ts'), 'utf8');
-    for (const cls of ['page--public-board', 'public-board-filter', 'public-board-badge', 'public-board__project-name']) {
+    for (const cls of ['page--public-board', 'publicFilterToggle', 'publicFilterPanel', 'data-public-sprint-option', 'data-public-priority-option', 'publicOmni', 'data-public-omni', 'public-board-badge', 'public-board__project-name']) {
       expect(memberSource).not.toContain(cls);
     }
+  });
+
+  it('hidden search controls stay hidden despite their display rules, with no duplicate native clear', () => {
+    const css = readFileSync(resolve(process.cwd(), 'styles.css'), 'utf8');
+    // .search-filter-toggle and .search-clear set display:flex, which beats the UA [hidden] rule.
+    expect(css).toMatch(/\.search-filter-toggle\[hidden\],[^{]*\.search-clear\[hidden\]\s*\{\s*display: none;/);
+    expect(css).toMatch(/\.page--public-board #publicSearchInput::-webkit-search-cancel-button\s*\{[^}]*display: none;/);
   });
 
   it('public styles use theme variables only, so light and dark themes both apply', () => {

@@ -23,6 +23,8 @@ import {
   stopPublicBoard,
   __getPublicBoardSessionForTest,
 } from './public-board.js';
+import { bindBoardFilterUi, resetBoardFilterUiState } from './board-filters.js';
+import { buildFilterPanelHtml, buildOmniFilterRowHtml } from './board-rendering.js';
 
 class FakeStream implements ServerEventStream {
   onopen: ((event: Event) => void) | null = null;
@@ -130,6 +132,21 @@ function defaultHandler(path: string): Reply {
 async function settle(): Promise<void> {
   for (let i = 0; i < 6; i++) await Promise.resolve();
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function panelOption(attr: string, value: string): HTMLButtonElement | undefined {
+  return Array.from(appEl.querySelectorAll<HTMLButtonElement>(`#publicFilterPanel [${attr}]`))
+    .find((el) => el.getAttribute(attr) === value);
+}
+
+/** Opens the public filter popover and clicks the option with the given value. */
+function pickPanelOption(attr: string, value: string): void {
+  const toggle = appEl.querySelector('#publicFilterToggle') as HTMLButtonElement;
+  const panel = appEl.querySelector('#publicFilterPanel') as HTMLElement;
+  if (panel.hidden) toggle.click();
+  const option = panelOption(attr, value);
+  if (!option) throw new Error(`no option ${attr}=${value}`);
+  option.click();
 }
 
 function cards(): HTMLElement[] {
@@ -288,19 +305,15 @@ describe('public board view', () => {
     await resolvePublicBoard({ slug: 'ignite', openTodoSegment: null });
     await vi.advanceTimersByTimeAsync(10);
 
-    (appEl.querySelector('[data-public-tag="api"]') as HTMLButtonElement).click();
+    (appEl.querySelector('#publicOmniCandidateViewport [data-public-omni-tag="api"]') as HTMLButtonElement).click();
     await vi.advanceTimersByTimeAsync(10);
     let last = new URL(requests.filter((p) => p.startsWith('/api/public/board/ignite?')).at(-1)!, 'https://example.test');
     expect(last.searchParams.getAll('tag')).toEqual(['api']);
     expect(new URL(window.location.href).searchParams.getAll('tag')).toEqual(['api']);
 
-    const sprint = appEl.querySelector('#publicSprintFilter') as HTMLSelectElement;
-    sprint.value = '2';
-    sprint.dispatchEvent(new Event('change', { bubbles: true }));
+    pickPanelOption('data-public-sprint-option', '2');
     await vi.advanceTimersByTimeAsync(10);
-    const priority = appEl.querySelector('#publicPriorityFilter') as HTMLSelectElement;
-    priority.value = 'high';
-    priority.dispatchEvent(new Event('change', { bubbles: true }));
+    pickPanelOption('data-public-priority-option', 'high');
     await vi.advanceTimersByTimeAsync(10);
 
     const search = appEl.querySelector('#publicSearchInput') as HTMLInputElement;
@@ -342,7 +355,7 @@ describe('public board view', () => {
     await settle();
     (appEl.querySelector('[data-public-load-more="backlog"]') as HTMLButtonElement).click();
     await settle();
-    (appEl.querySelector('[data-public-tag="api"]') as HTMLButtonElement).click();
+    (appEl.querySelector('#publicOmniCandidateViewport [data-public-omni-tag="api"]') as HTMLButtonElement).click();
     await settle();
     releaseLane({ status: 200, body: { items: [{ localId: 55, title: 'Stale', body: '', columnKey: 'backlog', tags: [] }], hasMore: false, nextCursor: null, totalCount: 9 } });
     await settle();
@@ -448,7 +461,7 @@ describe('public board sprint vocabulary and filter failures', () => {
   }
 
   function sprintOptions(): string[] {
-    return Array.from(appEl.querySelectorAll<HTMLOptionElement>('#publicSprintFilter option')).map((o) => o.value + ':' + o.textContent);
+    return Array.from(appEl.querySelectorAll<HTMLElement>('[data-public-sprint-option]')).map((o) => o.getAttribute('data-public-sprint-option') + ':' + o.textContent);
   }
 
   async function refreshViaStream(): Promise<void> {
@@ -524,7 +537,7 @@ describe('public board sprint vocabulary and filter failures', () => {
   it('filter reloads do not refetch the sprint vocabulary', async () => {
     await resolvePublicBoard({ slug: 'ignite', openTodoSegment: null });
     await vi.advanceTimersByTimeAsync(10);
-    (appEl.querySelector('[data-public-tag="api"]') as HTMLButtonElement).click();
+    (appEl.querySelector('#publicOmniCandidateViewport [data-public-omni-tag="api"]') as HTMLButtonElement).click();
     await vi.advanceTimersByTimeAsync(10);
     expect(sprintRequests()).toBe(1);
   });
@@ -544,7 +557,8 @@ describe('public board sprint vocabulary and filter failures', () => {
     expect(url.searchParams.getAll('tag')).toEqual(['api']);
     expect(lastSnapshotUrl().searchParams.has('sprintNumber')).toBe(false);
     expect(lastSnapshotUrl().searchParams.getAll('tag')).toEqual(['api']);
-    expect((appEl.querySelector('#publicSprintFilter') as HTMLSelectElement).value).toBe('');
+    expect(appEl.querySelector('[data-public-sprint-option=""]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(appEl.querySelector('[data-public-sprint-option].is-active')?.getAttribute('data-public-sprint-option')).toBe('');
   });
 
   it('clears an initial URL sprint filter that does not exist', async () => {
@@ -559,11 +573,11 @@ describe('public board sprint vocabulary and filter failures', () => {
     history.replaceState({}, '', '/ignite?sprintNumber=2');
     await resolvePublicBoard({ slug: 'ignite', openTodoSegment: null });
     await vi.advanceTimersByTimeAsync(10);
-    expect(appEl.querySelector('#publicSprintFilter')).not.toBeNull();
+    expect(appEl.querySelector('[data-public-sprint-section]')).not.toBeNull();
 
     snapshotOverride = () => ({ status: 200, body: snapshot({ project: { slug: 'ignite', name: 'Ignite', dominantColor: '', estimationMode: 'MODIFIED_FIBONACCI', sprintsEnabled: false } }) });
     await refreshViaStream();
-    expect(appEl.querySelector('#publicSprintFilter')).toBeNull();
+    expect(appEl.querySelector('[data-public-sprint-section]')).toBeNull();
     expect(sprintRequests()).toBe(1);
     expect(new URL(window.location.href).searchParams.has('sprintNumber')).toBe(false);
     expect(lastSnapshotUrl().searchParams.has('sprintNumber')).toBe(false);
@@ -571,7 +585,7 @@ describe('public board sprint vocabulary and filter failures', () => {
     snapshotOverride = null;
     await refreshViaStream();
     expect(sprintRequests()).toBe(2);
-    expect(appEl.querySelector('#publicSprintFilter')).not.toBeNull();
+    expect(appEl.querySelector('[data-public-sprint-section]')).not.toBeNull();
   });
 
   it('ignores a late sprint response from a superseded refresh', async () => {
@@ -599,7 +613,7 @@ describe('public board sprint vocabulary and filter failures', () => {
     release({ status: 200, body: { sprints: [{ number: 9, name: 'Late', state: 'ACTIVE' }] } });
     await vi.advanceTimersByTimeAsync(10);
     expect(appEl.querySelector('[data-public-board-state="unavailable"]')).not.toBeNull();
-    expect(appEl.querySelector('#publicSprintFilter')).toBeNull();
+    expect(appEl.querySelector('[data-public-sprint-section]')).toBeNull();
     expect(appEl.textContent).not.toContain('Late');
   });
 
@@ -609,13 +623,13 @@ describe('public board sprint vocabulary and filter failures', () => {
     expect(cards()).toHaveLength(1);
 
     snapshotOverride = (url) => (url.searchParams.getAll('tag').includes('api') ? { status: 503, body: {} } : null);
-    (appEl.querySelector('[data-public-tag="api"]') as HTMLButtonElement).click();
+    (appEl.querySelector('#publicOmniCandidateViewport [data-public-omni-tag="api"]') as HTMLButtonElement).click();
     await vi.advanceTimersByTimeAsync(10);
     expect(cards()).toHaveLength(0);
     expect(appEl.querySelector('[data-public-filter-error]')?.getAttribute('role')).toBe('alert');
     expect(appEl.querySelector('.public-board__no-results')).toBeNull();
     // The selected filter stays visible with the error, never with old cards.
-    expect(appEl.querySelector('[data-public-tag="api"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(appEl.querySelector('#publicOmniPinnedTags [data-public-omni-clear-tag="api"]')).not.toBeNull();
 
     snapshotOverride = null;
     (appEl.querySelector('[data-public-retry]') as HTMLButtonElement).click();
@@ -703,5 +717,680 @@ describe('public board sign-in affordance', () => {
     await resolvePublicBoard({ slug: 'ignite', openTodoSegment: null });
     await settle();
     expect(appEl.querySelector('#publicSignInBtn')).toBeNull();
+  });
+});
+
+describe('public board filter panel', () => {
+  let sprintsReply: (() => Reply) | null;
+  let snapshotOverride: ((url: URL) => Reply | null) | null;
+
+  function lastSnapshotUrl(): URL {
+    return new URL(requests.filter((p) => p.startsWith('/api/public/board/ignite?')).at(-1)!, 'https://example.test');
+  }
+  function snapshotRequests(): number {
+    return requests.filter((p) => p.startsWith('/api/public/board/ignite?')).length;
+  }
+  function toggle(): HTMLButtonElement {
+    return appEl.querySelector('#publicFilterToggle') as HTMLButtonElement;
+  }
+  function panel(): HTMLElement {
+    return appEl.querySelector('#publicFilterPanel') as HTMLElement;
+  }
+  function searchInput(): HTMLInputElement {
+    return appEl.querySelector('#publicSearchInput') as HTMLInputElement;
+  }
+  function activeValue(attr: string): string | null {
+    return appEl.querySelector(`#publicFilterPanel [${attr}].is-active`)?.getAttribute(attr) ?? null;
+  }
+  async function render(url = '/ignite'): Promise<void> {
+    history.replaceState({}, '', url);
+    await resolvePublicBoard({ slug: 'ignite', openTodoSegment: null });
+    await vi.advanceTimersByTimeAsync(10);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    resetAppRuntimeForTests();
+    sprintsReply = null;
+    snapshotOverride = null;
+    handler = (path) => {
+      const url = new URL(path, 'https://example.test');
+      if (url.pathname === '/api/public/board/ignite/sprints' && sprintsReply) return sprintsReply();
+      if (url.pathname === '/api/public/board/ignite' && snapshotOverride) {
+        const reply = snapshotOverride(url);
+        if (reply) return reply;
+      }
+      return defaultHandler(path);
+    };
+    installTransport();
+    appEl.innerHTML = '';
+    toastEl.textContent = '';
+    document.body.replaceChildren(appEl, toastEl);
+    setUser(null);
+    setSlug('ignite');
+    setBoard(null);
+    setProjectId(null);
+    setBoardAccess(null);
+  });
+
+  afterEach(() => {
+    stopPublicBoard();
+    vi.useRealTimers();
+    resetAppRuntimeForTests();
+  });
+
+  it('lives in the topbar search control, replacing the old dropdowns', async () => {
+    await render();
+    const wrapper = appEl.querySelector('.topbar .search-input-wrapper')!;
+    expect(wrapper.contains(searchInput())).toBe(true);
+    expect(wrapper.contains(toggle())).toBe(true);
+    expect(wrapper.contains(panel())).toBe(true);
+    expect(appEl.querySelector('select, #publicSprintFilter, #publicPriorityFilter')).toBeNull();
+    expect(toggle().hidden).toBe(false);
+    expect(panel().hidden).toBe(true);
+  });
+
+  it('selects, marks active, updates the URL, and clears sprint and priority', async () => {
+    await render('/ignite?tag=api');
+    pickPanelOption('data-public-sprint-option', '2');
+    // Selection state updates immediately; the popover closes and returns focus to the toggle.
+    expect(activeValue('data-public-sprint-option')).toBe('2');
+    expect(panelOption('data-public-sprint-option', '2')?.getAttribute('aria-pressed')).toBe('true');
+    expect(panel().hidden).toBe(true);
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(toggle());
+    expect(toggle().classList.contains('search-filter-toggle--active')).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(new URL(window.location.href).searchParams.get('sprintNumber')).toBe('2');
+    expect(lastSnapshotUrl().searchParams.get('sprintNumber')).toBe('2');
+
+    pickPanelOption('data-public-priority-option', 'high');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(activeValue('data-public-priority-option')).toBe('high');
+    let url = new URL(window.location.href);
+    expect(url.searchParams.get('priority')).toBe('high');
+    expect(url.searchParams.get('sprintNumber')).toBe('2');
+    expect(url.searchParams.getAll('tag')).toEqual(['api']);
+
+    pickPanelOption('data-public-sprint-option', '');
+    await vi.advanceTimersByTimeAsync(10);
+    pickPanelOption('data-public-priority-option', '');
+    await vi.advanceTimersByTimeAsync(10);
+    url = new URL(window.location.href);
+    expect(url.searchParams.has('sprintNumber')).toBe(false);
+    expect(url.searchParams.has('priority')).toBe(false);
+    expect(url.searchParams.getAll('tag')).toEqual(['api']);
+    expect(lastSnapshotUrl().searchParams.has('sprintNumber')).toBe(false);
+    expect(lastSnapshotUrl().searchParams.has('priority')).toBe(false);
+    expect(activeValue('data-public-sprint-option')).toBe('');
+    expect(activeValue('data-public-priority-option')).toBe('');
+    expect(toggle().classList.contains('search-filter-toggle--active')).toBe(false);
+
+    // Re-selecting the current value issues no request.
+    const before = snapshotRequests();
+    pickPanelOption('data-public-priority-option', '');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(snapshotRequests()).toBe(before);
+  });
+
+  it('opens and closes with the toggle, Escape, and outside clicks', async () => {
+    await render();
+    toggle().click();
+    expect(panel().hidden).toBe(false);
+    expect(toggle().getAttribute('aria-expanded')).toBe('true');
+    toggle().click();
+    expect(panel().hidden).toBe(true);
+
+    toggle().click();
+    // Clicking non-option content inside the panel keeps it open.
+    (panel().querySelector('.search-filter-panel__label') as HTMLElement).click();
+    expect(panel().hidden).toBe(false);
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(panel().hidden).toBe(true);
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+
+    toggle().click();
+    panelOption('data-public-priority-option', 'high')!.focus();
+    const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    document.activeElement!.dispatchEvent(escape);
+    expect(panel().hidden).toBe(true);
+    expect(escape.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(toggle());
+
+    // Escape with the panel closed is left alone (e.g. for the story dialog).
+    const idle = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    document.dispatchEvent(idle);
+    expect(idle.defaultPrevented).toBe(false);
+  });
+
+  it('is keyboard reachable: real buttons in DOM order after the toggle', async () => {
+    await render();
+    expect(toggle().type).toBe('button');
+    expect(toggle().getAttribute('aria-haspopup')).toBe('true');
+    expect(toggle().getAttribute('aria-controls')).toBe('publicFilterPanel');
+    expect(toggle().nextElementSibling).toBe(panel());
+    const options = Array.from(panel().querySelectorAll<HTMLButtonElement>('button'));
+    expect(options.length).toBeGreaterThan(0);
+    for (const option of options) {
+      expect(option.type).toBe('button');
+      expect(option.hasAttribute('aria-pressed')).toBe(true);
+    }
+  });
+
+  it('remains available and usable at mobile width', async () => {
+    const original = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 400 });
+    try {
+      await render();
+      expect(searchInput().getAttribute('placeholder')).toBe('board.search.placeholder.mobile');
+      expect(toggle().hidden).toBe(false);
+      toggle().click();
+      expect(panel().hidden).toBe(false);
+      // Positioned inside the narrow viewport.
+      expect(parseFloat(panel().style.left)).toBeGreaterThanOrEqual(8);
+      window.dispatchEvent(new Event('resize'));
+      expect(panel().hidden).toBe(false);
+      panelOption('data-public-priority-option', 'high')!.click();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(lastSnapshotUrl().searchParams.get('priority')).toBe('high');
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: original });
+    }
+  });
+
+  it('adds asynchronously loaded sprints and drops removed ones without rebuilding the search input', async () => {
+    let release: (value: { status: number; body?: unknown }) => void = () => {};
+    sprintsReply = () => new Promise((resolve) => { release = resolve; });
+    await render();
+    const input = searchInput();
+    const toggleEl = toggle();
+    input.focus();
+    expect(appEl.querySelector('[data-public-sprint-section]')).toBeNull();
+    expect(appEl.querySelector('[data-public-priority-section]')).not.toBeNull();
+
+    release({ status: 200, body: { sprints: [{ number: 2, name: 'Sprint Two', state: 'ACTIVE' }, { number: 5, name: 'Later', state: 'PLANNED' }] } });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(Array.from(appEl.querySelectorAll('[data-public-sprint-option]')).map((o) => o.getAttribute('data-public-sprint-option'))).toEqual(['', '2', '5']);
+    expect(panelOption('data-public-sprint-option', '5')?.classList.contains('search-filter-option--planned-sprint')).toBe(true);
+    expect(searchInput()).toBe(input);
+    expect(toggle()).toBe(toggleEl);
+    expect(document.activeElement).toBe(input);
+
+    // An open popover stays open while the vocabulary changes underneath it.
+    toggle().click();
+    sprintsReply = () => ({ status: 200, body: { sprints: [{ number: 2, name: 'Sprint Two', state: 'ACTIVE' }] } });
+    streams[0].send('{"type":"refresh_needed"}');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(panelOption('data-public-sprint-option', '5')).toBeUndefined();
+    expect(panelOption('data-public-sprint-option', '2')).toBeDefined();
+    expect(panel().hidden).toBe(false);
+    expect(searchInput()).toBe(input);
+  });
+
+  it('keeps focus on a still-present option when the vocabulary refreshes', async () => {
+    await render();
+    toggle().click();
+    panelOption('data-public-priority-option', 'high')!.focus();
+    sprintsReply = () => ({ status: 200, body: { sprints: [{ number: 2, name: 'Renamed', state: 'ACTIVE' }] } });
+    streams[0].send('{"type":"refresh_needed"}');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(panelOption('data-public-sprint-option', '2')?.textContent).toBe('Renamed');
+    expect(document.activeElement).toBe(panelOption('data-public-priority-option', 'high'));
+  });
+
+  it('hides the toggle when sprints are disabled and no priorities exist, moving focus to search', async () => {
+    await render();
+    toggle().click();
+    panelOption('data-public-sprint-option', '')!.focus();
+    snapshotOverride = () => ({ status: 200, body: snapshot({
+      project: { slug: 'ignite', name: 'Ignite', dominantColor: '', estimationMode: 'MODIFIED_FIBONACCI', sprintsEnabled: false },
+      priorities: [],
+    }) });
+    streams[0].send('{"type":"refresh_needed"}');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(toggle().hidden).toBe(true);
+    expect(panel().hidden).toBe(true);
+    expect(panel().querySelector('button')).toBeNull();
+    expect(document.activeElement).toBe(searchInput());
+  });
+
+  it('a failed filter keeps the selection visible with the error and keeps search focus', async () => {
+    await render();
+    const input = searchInput();
+    snapshotOverride = (url) => (url.searchParams.get('priority') === 'high' ? { status: 503, body: {} } : null);
+    pickPanelOption('data-public-priority-option', 'high');
+    input.focus();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(appEl.querySelector('[data-public-filter-error]')).not.toBeNull();
+    expect(cards()).toHaveLength(0);
+    expect(activeValue('data-public-priority-option')).toBe('high');
+    expect(toggle().classList.contains('search-filter-toggle--active')).toBe(true);
+    expect(searchInput()).toBe(input);
+    expect(document.activeElement).toBe(input);
+
+    // Clearing the failed filter recovers.
+    snapshotOverride = null;
+    pickPanelOption('data-public-priority-option', '');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(appEl.querySelector('[data-public-filter-error]')).toBeNull();
+    expect(cards()).toHaveLength(1);
+  });
+
+  it('preserves search focus and debounce across realtime refresh', async () => {
+    await render();
+    const input = searchInput();
+    input.focus();
+    input.value = 'nee';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    streams[0].send('{"type":"refresh_needed"}');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(searchInput()).toBe(input);
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe('nee');
+    expect(lastSnapshotUrl().searchParams.get('search')).toBe('nee');
+  });
+
+  it('URL navigation updates search and panel state in place', async () => {
+    await render('/ignite?search=old');
+    const input = searchInput();
+    const toggleEl = toggle();
+    const topbar = appEl.querySelector('.topbar');
+    // A pending keystroke loses to the navigation.
+    input.value = 'typing';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    history.pushState({}, '', '/ignite?priority=high&sprintNumber=2');
+    await applyPublicBoardRoute({ slug: 'ignite', openTodoSegment: null });
+    expect(appEl.querySelector('.topbar')).toBe(topbar);
+    expect(searchInput()).toBe(input);
+    expect(toggle()).toBe(toggleEl);
+    expect(input.value).toBe('');
+    expect(appEl.querySelector('#publicSearchClear')?.hasAttribute('hidden')).toBe(true);
+    expect(activeValue('data-public-priority-option')).toBe('high');
+    expect(activeValue('data-public-sprint-option')).toBe('2');
+    expect(toggle().classList.contains('search-filter-toggle--active')).toBe(true);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(lastSnapshotUrl().searchParams.get('priority')).toBe('high');
+    expect(lastSnapshotUrl().searchParams.has('search')).toBe(false);
+    expect(new URL(window.location.href).searchParams.has('search')).toBe(false);
+  });
+
+  it('ignores unsupported values even if an option is tampered with', async () => {
+    await render();
+    toggle().click();
+    const sprint = panelOption('data-public-sprint-option', '2')!;
+    const priority = panelOption('data-public-priority-option', 'high')!;
+    const before = requests.length;
+    for (const value of ['scheduled', 'unscheduled', '99', '-1', '2x']) {
+      sprint.setAttribute('data-public-sprint-option', value);
+      sprint.click();
+    }
+    for (const value of ['**none**', 'urgent']) {
+      priority.setAttribute('data-public-priority-option', value);
+      priority.click();
+    }
+    await vi.advanceTimersByTimeAsync(10);
+    expect(requests.length).toBe(before);
+    const url = new URL(window.location.href);
+    expect(url.searchParams.has('sprintNumber')).toBe(false);
+    expect(url.searchParams.has('priority')).toBe(false);
+  });
+
+  it('offers no unsupported options, mutation controls, or authenticated requests', async () => {
+    setUser({ id: 42, name: 'Nonmember', email: 'n@example.test' } as any);
+    await render();
+    toggle().click();
+    const sprintValues = Array.from(appEl.querySelectorAll('[data-public-sprint-option]')).map((o) => o.getAttribute('data-public-sprint-option'));
+    const priorityValues = Array.from(appEl.querySelectorAll('[data-public-priority-option]')).map((o) => o.getAttribute('data-public-priority-option'));
+    expect(sprintValues).toEqual(['', '2']);
+    expect(priorityValues).toEqual(['', 'high']);
+    expect(panel().querySelector('[data-assignee-option], [data-sort-option], [data-sprint-option], [data-priority-option], input, select, form')).toBeNull();
+    expect(panel().textContent).not.toMatch(/scheduled|noPriority|assignee|sort/i);
+    pickPanelOption('data-public-sprint-option', '2');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(requests.every((p) => p.startsWith('/api/public/board/ignite'))).toBe(true);
+  });
+
+  it('after a member board, public controls never reach the member filter controller', async () => {
+    // Member board first: installs board-filters' persistent document listeners.
+    history.replaceState({}, '', '/ignite');
+    appEl.innerHTML = `<div class="topbar"><div class="search-input-wrapper"><input id="searchInput" />${buildFilterPanelHtml(null, null, [], null, null, [{ key: 'high', name: 'High', color: '#ff0000', position: 0 }])}</div></div>`;
+    const memberReload = vi.fn(async () => {});
+    bindBoardFilterUi({ reloadBoard: memberReload, showError: () => {} });
+    (document.getElementById('searchFilterToggle') as HTMLButtonElement).click();
+    expect((document.getElementById('searchFilterPanel') as HTMLElement).hidden).toBe(false);
+    resetBoardFilterUiState();
+
+    // Navigate to the public board.
+    await render('/ignite');
+    expect(document.getElementById('searchFilterToggle')).toBeNull();
+    toggle().click();
+    expect(panel().hidden).toBe(false);
+    pickPanelOption('data-public-priority-option', 'high');
+    await vi.advanceTimersByTimeAsync(10);
+    toggle().click();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(panel().hidden).toBe(true);
+    pickPanelOption('data-public-sprint-option', '2');
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(memberReload).not.toHaveBeenCalled();
+    expect(toastEl.textContent).not.toContain('board.filters.filteringOn');
+    const url = new URL(window.location.href);
+    for (const memberParam of ['sprintId', 'assignee', 'sort']) expect(url.searchParams.has(memberParam)).toBe(false);
+    expect(url.searchParams.get('priority')).toBe('high');
+    expect(url.searchParams.get('sprintNumber')).toBe('2');
+    expect(requests.every((p) => p.startsWith('/api/public/board/ignite'))).toBe(true);
+  });
+
+  it('shows the search clear button while there is text and hides it again when cleared', async () => {
+    await render();
+    const clear = appEl.querySelector('#publicSearchClear') as HTMLButtonElement;
+    expect(clear.hidden).toBe(true);
+    searchInput().value = 'nee';
+    searchInput().dispatchEvent(new Event('input', { bubbles: true }));
+    expect(clear.hidden).toBe(false);
+    clear.click();
+    expect(clear.hidden).toBe(true);
+    expect(searchInput().value).toBe('');
+    expect(document.activeElement).toBe(searchInput());
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(new URL(window.location.href).searchParams.has('search')).toBe(false);
+  });
+
+  it('removes its document listeners when the public board stops', async () => {
+    await render();
+    toggle().click();
+    stopPublicBoard();
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(panel().hidden).toBe(false);
+  });
+});
+
+describe('public board Omni tags', () => {
+  const TAGS = [
+    { name: 'api', color: '#00ff00', activeCount: 3 },
+    { name: 'apex', color: 'javascript:alert(1)', activeCount: 1 },
+    { name: 'backend', color: '#0000ff', activeCount: 2 },
+    { name: 'idle', color: '#ff00ff', activeCount: 0 },
+  ];
+  let tags: typeof TAGS;
+  let snapshotFail: ((url: URL) => boolean) | null;
+
+  function snapshotRequests(): URL[] {
+    return requests.filter((p) => p.startsWith('/api/public/board/ignite?')).map((p) => new URL(p, 'https://example.test'));
+  }
+  function names(selector: string, attr: string): string[] {
+    return Array.from(appEl.querySelectorAll(selector)).map((el) => el.getAttribute(attr) ?? '');
+  }
+  const candidates = () => names('#publicOmniCandidateViewport [data-public-omni-tag]', 'data-public-omni-tag');
+  const pinned = () => names('#publicOmniPinnedTags [data-public-omni-clear-tag]', 'data-public-omni-clear-tag');
+  const mobile = () => Array.from(appEl.querySelectorAll('#publicOmniMobileTagPills .omni-tag-pill')).map((el) => el.querySelector('span')?.textContent ?? el.textContent);
+  const input = () => appEl.querySelector('#publicSearchInput') as HTMLInputElement;
+  function type(value: string): void {
+    input().focus();
+    input().value = value;
+    input().dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  function candidate(name: string): HTMLButtonElement {
+    return Array.from(appEl.querySelectorAll<HTMLButtonElement>('#publicOmniCandidateViewport [data-public-omni-tag]'))
+      .find((el) => el.getAttribute('data-public-omni-tag') === name)!;
+  }
+  function clearButton(name: string): HTMLButtonElement {
+    return Array.from(appEl.querySelectorAll<HTMLButtonElement>('#publicOmniPinnedTags [data-public-omni-clear-tag]'))
+      .find((el) => el.getAttribute('data-public-omni-clear-tag') === name)!;
+  }
+  async function render(url = '/ignite'): Promise<void> {
+    history.replaceState({}, '', url);
+    await resolvePublicBoard({ slug: 'ignite', openTodoSegment: null });
+    await vi.advanceTimersByTimeAsync(10);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    resetAppRuntimeForTests();
+    tags = TAGS;
+    snapshotFail = null;
+    handler = (path) => {
+      const url = new URL(path, 'https://example.test');
+      if (url.pathname === '/api/public/board/ignite') {
+        if (snapshotFail?.(url)) return { status: 503, body: {} };
+        return { status: 200, body: snapshot({ tags }) };
+      }
+      return defaultHandler(path);
+    };
+    installTransport();
+    appEl.innerHTML = '';
+    toastEl.textContent = '';
+    document.body.replaceChildren(appEl, toastEl);
+    setUser(null);
+    setSlug('ignite');
+    setBoard(null);
+    setProjectId(null);
+    setBoardAccess(null);
+  });
+
+  afterEach(() => {
+    stopPublicBoard();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    resetAppRuntimeForTests();
+  });
+
+  it('replaces the static chips with Browse candidates ordered by active count; no All chip', async () => {
+    await render();
+    expect(appEl.querySelector('.chip, [data-public-tag], #publicTagChips')).toBeNull();
+    expect(candidates()).toEqual(['api', 'backend', 'apex']);
+    expect(appEl.querySelectorAll('#publicOmniCandidateViewport .omni-tag-pill--browse')).toHaveLength(3);
+    // Empty search: no Browse candidates on the mobile rail.
+    expect(mobile()).toEqual([]);
+    // Unsafe color dropped; safe colors tint only, text keeps the theme color.
+    expect(candidate('apex').hasAttribute('style')).toBe(false);
+    expect(candidate('api').getAttribute('style')).toContain('color:var(--text)');
+  });
+
+  it('shows matching suggestions immediately while typing, before the debounce', async () => {
+    await render();
+    const before = snapshotRequests().length;
+    type('AP');
+    expect(candidates()).toEqual(['apex', 'api']);
+    expect(appEl.querySelectorAll('#publicOmniCandidateViewport .omni-tag-pill--suggestion')).toHaveLength(2);
+    expect(mobile()).toEqual(['apex', 'api']);
+    expect(snapshotRequests().length).toBe(before);
+    type('');
+    expect(candidates()).toEqual(['api', 'backend', 'apex']);
+  });
+
+  it('selecting a suggestion before the debounce consumes the search and issues exactly one reload', async () => {
+    await render('/ignite?priority=high&sprintNumber=2');
+    const before = snapshotRequests().length;
+    type('ape');
+    expect(appEl.querySelector<HTMLButtonElement>('#publicSearchClear')!.hidden).toBe(false);
+    candidate('apex').click();
+    expect(input().value).toBe('');
+    expect(appEl.querySelector<HTMLButtonElement>('#publicSearchClear')!.hidden).toBe(true);
+    expect(document.activeElement).toBe(input());
+    expect(pinned()).toEqual(['apex']);
+    expect(candidates()).toEqual(['api', 'backend']);
+    await vi.advanceTimersByTimeAsync(1000);
+    const after = snapshotRequests().slice(before);
+    expect(after).toHaveLength(1);
+    expect(after[0].searchParams.getAll('tag')).toEqual(['apex']);
+    expect(after[0].searchParams.has('search')).toBe(false);
+    expect(after[0].searchParams.get('priority')).toBe('high');
+    expect(after[0].searchParams.get('sprintNumber')).toBe('2');
+    const url = new URL(window.location.href);
+    expect(url.searchParams.getAll('tag')).toEqual(['apex']);
+    expect(url.searchParams.has('search')).toBe(false);
+  });
+
+  it('adds the canonical published name even if the typed case differs', async () => {
+    tags = [{ name: 'Backend', color: null as unknown as string, activeCount: 1 }];
+    await render();
+    const btn = candidate('Backend');
+    btn.setAttribute('data-public-omni-tag', 'BACKEND');
+    btn.click();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(snapshotRequests().at(-1)!.searchParams.getAll('tag')).toEqual(['Backend']);
+  });
+
+  it('removing one tag keeps every other filter, including a pending search, in one reload', async () => {
+    await render('/ignite?tag=api&tag=backend&priority=high&sprintNumber=2');
+    expect(pinned()).toEqual(['api', 'backend']);
+    const before = snapshotRequests().length;
+    type('needle');
+    clearButton('api').click();
+    expect(pinned()).toEqual(['backend']);
+    expect(document.activeElement).toBe(input());
+    await vi.advanceTimersByTimeAsync(1000);
+    const after = snapshotRequests().slice(before);
+    expect(after).toHaveLength(1);
+    expect(after[0].searchParams.getAll('tag')).toEqual(['backend']);
+    expect(after[0].searchParams.get('search')).toBe('needle');
+    expect(after[0].searchParams.get('priority')).toBe('high');
+    expect(after[0].searchParams.get('sprintNumber')).toBe('2');
+  });
+
+  it('rejects unknown or tampered values and stops at ten tags', async () => {
+    tags = Array.from({ length: 12 }, (_, i) => ({ name: `t${i}`, color: '#00ff00', activeCount: 12 - i }));
+    await render();
+    const before = requests.length;
+    const btn = candidate('t0');
+    for (const value of ['nope', '', 't0 ']) {
+      btn.setAttribute('data-public-omni-tag', value);
+      btn.click();
+    }
+    const clear = document.createElement('button');
+    clear.setAttribute('data-public-omni-clear-tag', 'not-selected');
+    appEl.querySelector('#publicOmniPinnedTags')!.append(clear);
+    clear.click();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(requests.length).toBe(before);
+
+    stopPublicBoard();
+    await render(`/ignite?${tags.slice(0, 10).map((tag) => `tag=${tag.name}`).join('&')}`);
+    expect(pinned()).toHaveLength(10);
+    expect(candidates()).toEqual([]);
+    type('t1');
+    expect(candidates()).toEqual([]);
+    // Even a forged add of a published tag is refused at the limit.
+    const forged = document.createElement('button');
+    forged.setAttribute('data-public-omni-tag', 't11');
+    appEl.querySelector('#publicOmniCandidateViewport')!.append(forged);
+    const count = snapshotRequests().length;
+    forged.click();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(new URL(window.location.href).searchParams.getAll('tag')).toHaveLength(10);
+    expect(snapshotRequests().every((u) => u.searchParams.getAll('tag').length <= 10)).toBe(true);
+    expect(snapshotRequests().slice(count).every((u) => !u.searchParams.getAll('tag').includes('t11'))).toBe(true);
+  });
+
+  it('clearing a still-debouncing search restores Browse and sends nothing', async () => {
+    await render();
+    const before = snapshotRequests().length;
+    type('ap');
+    expect(candidates()).toEqual(['apex', 'api']);
+    (appEl.querySelector('#publicSearchClear') as HTMLButtonElement).click();
+    expect(candidates()).toEqual(['api', 'backend', 'apex']);
+    expect(mobile()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(snapshotRequests().length).toBe(before);
+  });
+
+  it('keeps a URL tag that left the vocabulary as a removable pinned pill', async () => {
+    await render('/ignite?tag=Vanished&tag=api');
+    expect(pinned()).toEqual(['Vanished', 'api']);
+    clearButton('Vanished').click();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(new URL(window.location.href).searchParams.getAll('tag')).toEqual(['api']);
+    expect(pinned()).toEqual(['api']);
+  });
+
+  it('a failed tag filter shows the error with the pinned tag still visible', async () => {
+    await render();
+    snapshotFail = (url) => url.searchParams.getAll('tag').includes('api');
+    candidate('api').click();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(appEl.querySelector('[data-public-filter-error]')).not.toBeNull();
+    expect(pinned()).toEqual(['api']);
+  });
+
+  it('SSE refreshes keep the Omni shell, unchanged pills, scroll, and focus', async () => {
+    await render('/ignite?tag=api');
+    const shell = appEl.querySelector('[data-public-omni]');
+    const viewport = appEl.querySelector<HTMLElement>('#publicOmniCandidateViewport')!;
+    const pill = candidate('backend');
+    pill.focus();
+    Object.defineProperty(viewport, 'scrollWidth', { configurable: true, value: 500 });
+    Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 100 });
+    viewport.scrollLeft = 60;
+    streams[0].send('{"type":"refresh_needed"}');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(appEl.querySelector('[data-public-omni]')).toBe(shell);
+    expect(candidate('backend')).toBe(pill);
+    expect(document.activeElement).toBe(pill);
+    expect(viewport.scrollLeft).toBe(60);
+
+    // A vocabulary change re-renders the candidates and keeps focus on the same tag.
+    tags = [...TAGS, { name: 'zed', color: '#00ff00', activeCount: 9 }];
+    streams[0].send('{"type":"refresh_needed"}');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(candidates()).toEqual(['zed', 'backend', 'apex']);
+    expect(document.activeElement).toBe(candidate('backend'));
+    expect(appEl.querySelector('[data-public-omni]')).toBe(shell);
+  });
+
+  it('URL navigation updates pinned tags in place', async () => {
+    await render('/ignite?tag=api');
+    const shell = appEl.querySelector('[data-public-omni]');
+    history.pushState({}, '', '/ignite?tag=backend&tag=apex');
+    await applyPublicBoardRoute({ slug: 'ignite', openTodoSegment: null });
+    expect(pinned()).toEqual(['backend', 'apex']);
+    expect(candidates()).toEqual(['api']);
+    expect(appEl.querySelector('[data-public-omni]')).toBe(shell);
+  });
+
+  it('teardown disconnects the resize observer and drops Omni listeners', async () => {
+    const observers: { disconnect: ReturnType<typeof vi.fn>; observe: ReturnType<typeof vi.fn> }[] = [];
+    vi.stubGlobal('ResizeObserver', class {
+      disconnect = vi.fn();
+      observe = vi.fn();
+      constructor() { observers.push(this); }
+    });
+    await render();
+    expect(observers).toHaveLength(1);
+    expect(observers[0].observe).toHaveBeenCalledTimes(2);
+    const btn = candidate('api');
+    stopPublicBoard();
+    expect(observers[0].disconnect).toHaveBeenCalledTimes(1);
+    const before = requests.length;
+    btn.click();
+    window.dispatchEvent(new Event('resize'));
+    await vi.advanceTimersByTimeAsync(10);
+    expect(requests.length).toBe(before);
+  });
+
+  it('after a member Omni board, member handlers never act on public Omni controls', async () => {
+    history.replaceState({}, '', '/ignite');
+    appEl.innerHTML = `<div class="topbar"><div class="search-input-wrapper"><input id="searchInput" />${buildFilterPanelHtml(null, null, [], null)}</div></div>${buildOmniFilterRowHtml({} as never, { searchInTopbar: true })}`;
+    const memberReload = vi.fn(async () => {});
+    bindBoardFilterUi({ reloadBoard: memberReload, showError: () => {} });
+    const memberBar = appEl.querySelector<HTMLElement>('#omniPinnedTags')!.closest<HTMLElement>('.omni-bar')!;
+    expect(memberBar.onclick).not.toBeNull();
+    resetBoardFilterUiState();
+
+    await render('/ignite');
+    expect(appEl.querySelector('[id^="omni"]')).toBeNull();
+    expect(appEl.querySelector<HTMLElement>('[data-public-omni] .omni-bar')!.onclick).toBeNull();
+    candidate('api').click();
+    await vi.advanceTimersByTimeAsync(10);
+    clearButton('api').click();
+    window.dispatchEvent(new Event('resize'));
+    await vi.advanceTimersByTimeAsync(10);
+    expect(memberReload).not.toHaveBeenCalled();
+    const url = new URL(window.location.href);
+    for (const memberParam of ['sprintId', 'assignee', 'sort']) expect(url.searchParams.has(memberParam)).toBe(false);
+    expect(requests.every((p) => p.startsWith('/api/public/board/ignite'))).toBe(true);
+    expect(snapshotRequests().some((u) => u.searchParams.getAll('tag').includes('api'))).toBe(true);
   });
 });

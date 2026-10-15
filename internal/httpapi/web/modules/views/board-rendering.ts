@@ -1,7 +1,7 @@
 import { columnsSpec } from '../features/drag-drop.js';
-import { formatDueBadge, formatDueDateTooltip, isOverdue } from '../dialogs/todo-due.js';
+import { formatDueDateTooltip, isOverdue } from '../dialogs/todo-due.js';
 import type { BoardMember } from '../state/state.js';
-import { Board, NO_PRIORITY_FILTER_VALUE, PriorityTier, Todo } from '../types.js';
+import { Board, PriorityTier, Todo } from '../types.js';
 import {
   escapeHTML,
   isTemporaryBoard,
@@ -12,6 +12,15 @@ import {
 import { FIELD_TOOLTIPS, titleAttr } from '../field-tooltips.js';
 import { hasI18nKey, t } from '../i18n/index.js';
 import type { BoardFilterLayout } from '../core/board-filter-layout-preferences.js';
+import {
+  buildFilterPanelSectionHtml,
+  buildFilterPanelShellHtml,
+  buildPriorityFilterOptions,
+  buildSprintFilterOptions,
+  renderFilterOptionsHtml,
+} from './filter-panel-markup.js';
+import { buildOmniBarHtml } from './omni-tags.js';
+import { renderMemberStoryCardContentHtml, type StoryCardContentInput } from './story-card-content.js';
 
 export type BoardColumn = { key: string; title: string; color?: string; isDone: boolean };
 export type ChipType = "tag" | "sprint";
@@ -241,66 +250,32 @@ export function renderTodoCard(
   `;
 }
 
+/** Maps a member todo onto the shared story-card presentation model. */
+export function toMemberStoryCardInput(todo: Todo, opts?: RenderTodoCardOpts): StoryCardContentInput {
+  const tagColors = opts?.tagColors ?? null;
+  const priorityTier = todo.priorityKey ? opts?.priorityTiers?.[todo.priorityKey] : null;
+  const doneKey = (todo.columnKey || todo.status || "").toLowerCase();
+  return {
+    localId: todo.localId,
+    title: todo.title,
+    tags: (todo.tags || []).map((name) => ({ name, color: tagColors ? (tagColors[name] ?? null) : null })),
+    priority: priorityTier ? { name: priorityTier.name, color: priorityTier.color ?? null } : null,
+    points: opts?.showPointsMode && todo.estimationPoints != null ? todo.estimationPoints : null,
+    due: todo.dueAt ? { dueAt: todo.dueAt, inDoneColumn: opts?.doneColumnKeys?.has(doneKey) ?? false } : null,
+  };
+}
+
 /** Shared canonical story content used by both board cards and Wall pins. */
 export function renderStoryCardContent(
   todo: Todo,
   membersByUserId?: Record<number, BoardMember>,
   opts?: RenderTodoCardOpts,
 ): string {
-  const showPoints = !!opts?.showPointsMode && todo.estimationPoints != null;
-  const tagColors = opts?.tagColors ?? null;
-  const tags = (todo.tags || [])
-    .map((tagName) => {
-      const tagColor = tagColors ? (tagColors[tagName] ?? null) : null;
-      const safe = sanitizeHexColor(tagColor);
-      const colorStyle = safe ? `style="border-color: ${safe}; background: ${safe}20; color: ${safe};"` : "";
-      return `<span class="tag" ${colorStyle}>${escapeHTML(tagName)}</span>`;
-    })
-    .join("");
   const assignee = membersByUserId != null && todo.assigneeUserId != null ? membersByUserId[todo.assigneeUserId] : null;
   const avatarHTML = assignee
     ? `<div class="todo-avatar" title="${escapeHTML(assignee.name || assignee.email || '')}">${renderAvatarContent({ name: assignee.name, email: assignee.email, image: assignee.image })}</div>`
     : '';
-  const pointsHTML = showPoints
-    ? `<span class="card__points"${titleAttr(FIELD_TOOLTIPS.estimationPoints)} aria-label="${escapeHTML(t("todo.fields.estimationPoints"))}" data-i18n-aria-label="todo.fields.estimationPoints">${todo.estimationPoints}</span>`
-    : "";
-  const priorityTier = todo.priorityKey ? opts?.priorityTiers?.[todo.priorityKey] : null;
-  const priorityColor = sanitizeHexColor(priorityTier?.color ?? null);
-  const priorityStyle = priorityColor
-    ? ` style="border-color:${priorityColor}; background:${priorityColor}20; color:${priorityColor};"`
-    : "";
-  const priorityHTML = priorityTier
-    ? `<span class="card__priority"${priorityStyle}${titleAttr(FIELD_TOOLTIPS.priority)} aria-label="${escapeHTML(t("todo.fields.priority"))}: ${escapeHTML(priorityTier.name)}">${escapeHTML(priorityTier.name)}</span>`
-    : "";
-  let dueHTML = "";
-  if (todo.dueAt) {
-    const label = formatDueBadge(todo.dueAt);
-    if (label) {
-      const doneKey = (todo.columnKey || todo.status || "").toLowerCase();
-      const overdue = isOverdue(todo.dueAt, opts?.doneColumnKeys?.has(doneKey) ?? false);
-      const aria = escapeHTML(t("todo.due.cardLabel", { date: label }));
-      dueHTML = `<span class="card__due${overdue ? " card__due--overdue" : ""}" title="${aria}" aria-label="${aria}">${escapeHTML(label)}</span>`;
-    }
-  }
-  const footerContent = dueHTML + priorityHTML + pointsHTML + avatarHTML;
-  return `
-      <div class="card__content">
-        <div class="card__title-row">
-          <span class="card__id-inline">#${todo.localId}</span>
-          <span class="card__title">${escapeHTML(todo.title)}</span>
-        </div>
-        ${tags || footerContent ? `
-  <div class="card__tags">
-    <span class="card__tags-list">
-      ${tags}
-    </span>
-    <span class="card__badges">
-      ${footerContent}
-    </span>
-  </div>
-` : ""}
-      </div>
-  `;
+  return renderMemberStoryCardContentHtml(toMemberStoryCardInput(todo, opts), { tagTone: 'accent', tooltips: true }, avatarHTML);
 }
 
 export function buildBoardColumnsHtml(args: BuildBoardColumnsHtmlArgs): string {
@@ -409,19 +384,20 @@ export function buildOmniFilterRowHtml(
   args: Omit<BuildSearchFilterControlArgs, 'layout'>,
   opts?: { searchInTopbar?: boolean },
 ): string {
-  const previousLabel = escapeHTML(t('board.filters.previous'));
-  const nextLabel = escapeHTML(t('board.filters.next'));
   return `<div class="filters filters--omni" data-board-filter-layout="omni">
-    <div class="omni-bar">
-      ${opts?.searchInTopbar ? '' : `<div class="search-input-wrapper">${buildSearchFilterControlHtml({ ...args, layout: 'omni' })}</div>`}
-      <div class="omni-pinned-tags" id="omniPinnedTags"></div>
-      <div class="omni-candidate-region" id="omniCandidateRegion">
-        <button type="button" class="omni-candidate-chevron omni-candidate-chevron--prev" id="omniCandidatePrev" aria-label="${previousLabel}" disabled aria-hidden="true">‹</button>
-        <div class="omni-candidate-viewport" id="omniCandidateViewport"></div>
-        <button type="button" class="omni-candidate-chevron omni-candidate-chevron--next" id="omniCandidateNext" aria-label="${nextLabel}" disabled aria-hidden="true">›</button>
-      </div>
-      <div class="omni-mobile-tag-pills" id="omniMobileTagPills"></div>
-    </div>
+    ${buildOmniBarHtml({
+      ids: {
+        pinned: 'omniPinnedTags',
+        region: 'omniCandidateRegion',
+        previous: 'omniCandidatePrev',
+        viewport: 'omniCandidateViewport',
+        next: 'omniCandidateNext',
+        mobile: 'omniMobileTagPills',
+      },
+      previousLabel: t('board.filters.previous'),
+      nextLabel: t('board.filters.next'),
+      leadingHtml: opts?.searchInTopbar ? '' : `<div class="search-input-wrapper">${buildSearchFilterControlHtml({ ...args, layout: 'omni' })}</div>`,
+    })}
   </div>`;
 }
 
@@ -588,22 +564,11 @@ function sortFilterOptionsHtml(sort: string | null): string {
 }
 
 function priorityFilterOptionsHtml(priority: string | null, tiers: PriorityTier[]): string {
-  const current = priority || "";
-  const optionClass = (value: string) => `search-filter-option${current === value ? " is-active" : ""}`;
-  const allPrioritiesLabel = escapeHTML(t("board.filters.allPriorities"));
-  const noPriorityLabel = escapeHTML(t("board.filters.noPriority"));
-  const tierOptions = tiers
-    .map((tier) => {
-      const safe = sanitizeHexColor(tier.color);
-      const colorStyle = safe ? `style="border-color: ${safe}; background: ${safe}20;"` : "";
-      return `<button type="button" class="${optionClass(tier.key)}" data-priority-option="${escapeHTML(tier.key)}" ${colorStyle}>${escapeHTML(tier.name)}</button>`;
-    })
-    .join("");
-  return `
-      <button type="button" class="${optionClass("")}" data-priority-option="" data-i18n-text="board.filters.allPriorities">${allPrioritiesLabel}</button>
-      <button type="button" class="${optionClass(NO_PRIORITY_FILTER_VALUE)}" data-priority-option="${NO_PRIORITY_FILTER_VALUE}" data-i18n-text="board.filters.noPriority">${noPriorityLabel}</button>
-      ${tierOptions}
-  `;
+  return renderFilterOptionsHtml(
+    buildPriorityFilterOptions(tiers, { includeNoPriority: true }),
+    priority || "",
+    { attr: "data-priority-option" },
+  );
 }
 
 export function buildSprintFilterSectionHtml(
@@ -611,35 +576,15 @@ export function buildSprintFilterSectionHtml(
   sprintData: SprintChipData | null,
 ): string {
   const current = sprintId === 'assigned' ? 'scheduled' : (sprintId || '');
-  const optionClass = (value: string, sprint?: SprintChipData['sprints'][number]) => {
-    const stateClass = sprint?.state === 'ACTIVE'
-      ? ' search-filter-option--active-sprint'
-      : sprint?.state === 'CLOSED'
-        ? ' search-filter-option--closed-sprint'
-        : sprint?.state === 'PLANNED'
-          ? ' search-filter-option--planned-sprint'
-          : '';
-    return `search-filter-option${current === value ? ' is-active' : ''}${stateClass}`;
-  };
-  const nameCount = new Map<string, number>();
-  for (const sprint of sprintData?.sprints ?? []) {
-    nameCount.set(sprint.name, (nameCount.get(sprint.name) ?? 0) + 1);
-  }
-  const seen = new Set<number>();
-  const namedOptions = (sprintData?.sprints ?? []).map((sprint) => {
-    if (seen.has(sprint.id)) return '';
-    seen.add(sprint.id);
-    const label = (nameCount.get(sprint.name) ?? 0) > 1 ? `${sprint.name} (${sprint.number})` : sprint.name;
-    return `<button type="button" class="${optionClass(String(sprint.number), sprint)}" data-sprint-option="${escapeHTML(String(sprint.number))}">${escapeHTML(label)}</button>`;
-  }).join('');
-  return `
-      <div class="search-filter-panel__section" data-sprint-filter-section>
-        <div class="search-filter-panel__label" data-i18n-text="board.filters.sprint">${escapeHTML(t('board.filters.sprint'))}</div>
-        <button type="button" class="${optionClass('')}" data-sprint-option="" data-i18n-text="board.filters.allSprints">${escapeHTML(t('board.filters.allSprints'))}</button>
-        <button type="button" class="${optionClass('scheduled')}" data-sprint-option="scheduled" data-i18n-text="board.filters.scheduled">${escapeHTML(t('board.filters.scheduled'))}</button>
-        <button type="button" class="${optionClass('unscheduled')}" data-sprint-option="unscheduled" data-i18n-text="board.filters.unscheduled">${escapeHTML(t('board.filters.unscheduled'))}</button>
-        ${namedOptions}
-      </div>`;
+  const options = buildSprintFilterOptions(sprintData?.sprints ?? [], {
+    includeScheduled: true,
+    identity: (sprint) => sprint.id,
+  });
+  return buildFilterPanelSectionHtml({
+    labelKey: 'board.filters.sprint',
+    optionsHtml: renderFilterOptionsHtml(options, current, { attr: 'data-sprint-option' }),
+    sectionAttr: 'data-sprint-filter-section',
+  });
 }
 
 // isBoardFilterActive is true whenever a non-default assignee filter, a
@@ -676,43 +621,18 @@ export function buildFilterPanelHtml(
   } = {},
 ): string {
   const layout = options.layout ?? 'legacy';
-  const filtersLabel = escapeHTML(t("board.filters.openFilters"));
-  const toggleActiveClass = isBoardFilterActive(assignee, sort, priority, options.sprintId ?? null, layout) ? " search-filter-toggle--active" : "";
   const sprintSection = layout === 'omni' && options.sprintsEnabled
     ? buildSprintFilterSectionHtml(options.sprintId ?? null, options.sprintData ?? null)
     : '';
-  return `
-    <button
-      type="button"
-      class="search-filter-toggle${toggleActiveClass}"
-      id="searchFilterToggle"
-      aria-expanded="false"
-      aria-haspopup="true"
-      aria-label="${filtersLabel}"
-      title="${filtersLabel}"
-      data-i18n-aria-label="board.filters.openFilters"
-      data-i18n-title="board.filters.openFilters"
-    >
-      <svg width="10" height="6" viewBox="0 0 10 6" fill="none" aria-hidden="true" focusable="false">
-        <path d="M1 1L5 5L9 1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-    </button>
-    <div class="search-filter-panel" id="searchFilterPanel" hidden>
-      ${sprintSection}
-      <div class="search-filter-panel__section">
-        <div class="search-filter-panel__label" data-i18n-text="board.filters.assignee">${escapeHTML(t("board.filters.assignee"))}</div>
-        ${assigneeFilterOptionsHtml(assignee, boardMembers, user)}
-      </div>
-      <div class="search-filter-panel__section">
-        <div class="search-filter-panel__label" data-i18n-text="board.filters.sort">${escapeHTML(t("board.filters.sort"))}</div>
-        ${sortFilterOptionsHtml(sort)}
-      </div>
-      <div class="search-filter-panel__section">
-        <div class="search-filter-panel__label" data-i18n-text="board.filters.priority">${escapeHTML(t("board.filters.priority"))}</div>
-        ${priorityFilterOptionsHtml(priority, priorityTiers)}
-      </div>
-    </div>
-  `;
+  return buildFilterPanelShellHtml({
+    toggleId: "searchFilterToggle",
+    panelId: "searchFilterPanel",
+    active: isBoardFilterActive(assignee, sort, priority, options.sprintId ?? null, layout),
+    sectionsHtml: sprintSection
+      + buildFilterPanelSectionHtml({ labelKey: "board.filters.assignee", optionsHtml: assigneeFilterOptionsHtml(assignee, boardMembers, user) })
+      + buildFilterPanelSectionHtml({ labelKey: "board.filters.sort", optionsHtml: sortFilterOptionsHtml(sort) })
+      + buildFilterPanelSectionHtml({ labelKey: "board.filters.priority", optionsHtml: priorityFilterOptionsHtml(priority, priorityTiers) }),
+  });
 }
 
 export function buildNoResultsHtml(search: string): string {

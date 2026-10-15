@@ -1,6 +1,6 @@
 /**
  * Pure HTML builders for the public read-only board. They reuse the member
- * board's layout classes (topbar, filters, chips, columns, cards, mobile tabs)
+ * board's layout classes (topbar, Omni tag row, columns, cards, mobile tabs)
  * so the page looks like Scrumboy, but emit no mutation controls, drag
  * handles, selection state, member/assignee data, or global identifiers.
  * Cards are keyed only by project-local IDs (data-public-local-id) so no member
@@ -9,8 +9,27 @@
 
 import { escapeHTML, renderUserAvatar, sanitizeHexColor } from '../utils.js';
 import { t } from '../i18n/index.js';
+import {
+  buildFilterPanelSectionHtml,
+  buildFilterPanelShellHtml,
+  buildPriorityFilterOptions,
+  buildSprintFilterOptions,
+  renderFilterOptionsHtml,
+} from './filter-panel-markup.js';
+import {
+  buildOmniBarHtml,
+  buildOmniRowContent,
+  compareOmniTagNames,
+  matchOmniTagCandidates,
+  rankOmniBrowseCandidates,
+  type OmniRowContent,
+  type OmniRowIds,
+} from './omni-tags.js';
+import { renderStoryCardContentHtml, type StoryCardContentInput } from './story-card-content.js';
 import type { User } from '../types.js';
+import { PUBLIC_MAX_TAG_FILTERS } from '../public-board-api.js';
 import type {
+  PublicTagSummary,
   PublicBoardQuery,
   PublicBoardSnapshot,
   PublicLaneMeta,
@@ -39,19 +58,6 @@ function attrI18n(kind: 'text' | 'aria-label' | 'placeholder' | 'title', key: st
   return ` data-i18n-${kind}="${escapeHTML(key)}"`;
 }
 
-function colorStyle(color: string | null, withText = false): string {
-  const safe = sanitizeHexColor(color ?? undefined);
-  if (!safe) return '';
-  return ` style="border-color: ${safe}; background: ${safe}20;${withText ? ` color: ${safe};` : ''}"`;
-}
-
-/** Tag accent on border/tint only; text keeps the theme foreground for contrast. */
-function tagColorStyle(color: string | null): string {
-  const safe = sanitizeHexColor(color ?? undefined);
-  if (!safe) return '';
-  return ` style="border-color: ${safe}; background: ${safe}20; color: var(--text);"`;
-}
-
 export function publicPriorityMap(priorities: readonly PublicPriority[]): Record<string, PublicPriority> {
   const out: Record<string, PublicPriority> = {};
   for (const priority of priorities) out[priority.key] = priority;
@@ -62,34 +68,37 @@ export function showPublicPoints(snapshot: PublicBoardSnapshot): boolean {
   return snapshot.project.estimationMode === 'MODIFIED_FIBONACCI';
 }
 
+/**
+ * Maps only fields of the public DTO onto the shared story-card model. The
+ * public projection has no due date or assignee, so neither is rendered.
+ */
+export function toPublicStoryCardInput(
+  todo: PublicTodo,
+  priorities: Record<string, PublicPriority>,
+  showPoints: boolean,
+): StoryCardContentInput {
+  const priority = todo.priorityKey ? priorities[todo.priorityKey] : undefined;
+  return {
+    localId: todo.localId,
+    title: todo.title,
+    tags: todo.tags.map((tag) => ({ name: tag.name, color: tag.color })),
+    priority: priority ? { name: priority.name, color: priority.color } : null,
+    points: showPoints && todo.estimationPoints != null ? todo.estimationPoints : null,
+    due: null,
+  };
+}
+
 export function renderPublicTodoCard(
   todo: PublicTodo,
   column: PublicWorkflowColumn,
   priorities: Record<string, PublicPriority>,
   showPoints: boolean,
 ): string {
-  const tags = todo.tags
-    .map((tag) => `<span class="tag"${tagColorStyle(tag.color)}>${escapeHTML(tag.name)}</span>`)
-    .join('');
-  const priority = todo.priorityKey ? priorities[todo.priorityKey] : undefined;
-  const priorityHTML = priority
-    ? `<span class="card__priority"${colorStyle(priority.color, true)} aria-label="${escapeHTML(t('todo.fields.priority'))}: ${escapeHTML(priority.name)}">${escapeHTML(priority.name)}</span>`
-    : '';
-  const pointsHTML = showPoints && todo.estimationPoints != null
-    ? `<span class="card__points" aria-label="${escapeHTML(t('todo.fields.estimationPoints'))}"${attrI18n('aria-label', 'todo.fields.estimationPoints')}>${todo.estimationPoints}</span>`
-    : '';
-  const footer = priorityHTML + pointsHTML;
+  // Tag accents stay on border/tint; text keeps the theme foreground for contrast.
+  const content = renderStoryCardContentHtml(toPublicStoryCardInput(todo, priorities, showPoints), { tagTone: 'theme', tooltips: false });
   const border = sanitizeHexColor(column.color ?? undefined);
   return `
-    <button class="card card--public" type="button" data-public-local-id="${todo.localId}"${border ? ` style="border-color:${border}"` : ''}>
-      <div class="card__content">
-        <div class="card__title-row">
-          <span class="card__id-inline">#${todo.localId}</span>
-          <span class="card__title">${escapeHTML(todo.title)}</span>
-        </div>
-        ${tags || footer ? `<div class="card__tags"><span class="card__tags-list">${tags}</span><span class="card__badges">${footer}</span></div>` : ''}
-      </div>
-    </button>`;
+    <button class="card card--public" type="button" data-public-local-id="${escapeHTML(String(todo.localId))}"${border ? ` style="border-color:${border}"` : ''}>${content}</button>`;
 }
 
 function laneLoadMoreHtml(key: string, lane: PublicLaneState): string {
@@ -142,52 +151,110 @@ export function buildPublicMobileTabsHtml(view: PublicBoardViewModel): string {
     .join('');
 }
 
-function sprintLabel(sprint: PublicSprint, duplicateName: boolean): string {
-  return duplicateName ? `${sprint.name} (${sprint.number})` : sprint.name;
+/** Public Omni row IDs and attributes, distinct from the member board's omni* IDs and data-omni-* hooks. */
+export const PUBLIC_OMNI_IDS: OmniRowIds = Object.freeze({
+  pinned: 'publicOmniPinnedTags',
+  region: 'publicOmniCandidateRegion',
+  previous: 'publicOmniCandidatePrev',
+  viewport: 'publicOmniCandidateViewport',
+  next: 'publicOmniCandidateNext',
+  mobile: 'publicOmniMobileTagPills',
+});
+export const PUBLIC_OMNI_TAG_ATTR = 'data-public-omni-tag';
+export const PUBLIC_OMNI_CLEAR_ATTR = 'data-public-omni-clear-tag';
+
+/**
+ * Stable Omni shell for the public tag filter. Rendered once per page; only its
+ * pinned, candidate, and mobile regions are updated afterwards.
+ */
+export function buildPublicOmniRowHtml(): string {
+  return `
+    <div class="filters filters--omni public-board-omni" data-public-omni>
+      ${buildOmniBarHtml({ ids: PUBLIC_OMNI_IDS, previousLabel: t('board.filters.previous'), nextLabel: t('board.filters.next') })}
+    </div>`;
 }
 
-export function buildPublicFiltersHtml(view: PublicBoardViewModel): string {
-  const activeTags = new Set(view.query.tags.map((tag) => tag.toLocaleLowerCase()));
-  const allLabel = escapeHTML(t('board.filters.all'));
-  const chips = [
-    `<button class="chip${view.query.tags.length === 0 ? ' chip--active' : ''}" type="button" data-public-tag="" aria-pressed="${view.query.tags.length === 0 ? 'true' : 'false'}"${attrI18n('text', 'board.filters.all')}>${allLabel}</button>`,
-    ...view.snapshot.tags.map((tag) => {
-      const active = activeTags.has(tag.name.toLocaleLowerCase());
-      return `<button class="chip${active ? ' chip--active' : ''}" type="button" data-public-tag="${escapeHTML(tag.name)}" aria-pressed="${active ? 'true' : 'false'}"${colorStyle(tag.color)}>${escapeHTML(tag.name)}</button>`;
-    }),
-  ].join('');
+/** Public Browse order: most active first, then name. The public API exposes no recency. */
+export function comparePublicBrowseTags(left: PublicTagSummary, right: PublicTagSummary): number {
+  if (left.activeCount !== right.activeCount) return right.activeCount - left.activeCount;
+  return compareOmniTagNames(left.name, right.name);
+}
 
-  let sprintSelect = '';
+/**
+ * Pinned pills for every selected tag (including tags no longer in the
+ * vocabulary, so they stay removable), plus Browse candidates for an empty
+ * input or matches for the typed input. Only tags with active stories are
+ * offered. Text keeps the theme color; tag colors tint border and background.
+ */
+export function buildPublicOmniContent(args: {
+  readonly tags: readonly PublicTagSummary[];
+  readonly selected: readonly string[];
+  readonly input: string;
+}): OmniRowContent {
+  const byName = new Map(args.tags.map((tag) => [tag.name.toLocaleLowerCase(), tag]));
+  const selectable = args.tags.filter((tag) => tag.activeCount > 0);
+  const browse = args.input.trim() === '';
+  const candidates = browse
+    ? rankOmniBrowseCandidates(selectable, args.selected, PUBLIC_MAX_TAG_FILTERS, comparePublicBrowseTags)
+    : matchOmniTagCandidates(args.input, selectable, args.selected, PUBLIC_MAX_TAG_FILTERS);
+  return buildOmniRowContent({
+    applied: args.selected.map((name) => ({ name, color: byName.get(name.toLocaleLowerCase())?.color ?? null })),
+    candidates,
+    browse,
+    attrs: { tag: PUBLIC_OMNI_TAG_ATTR, clear: PUBLIC_OMNI_CLEAR_ATTR },
+    tone: 'theme',
+    clearLabel: (name) => t('board.filters.clearTag', { name }),
+  });
+}
+
+/** Public filter popover ids and option attributes, distinct from the member panel's. */
+export const PUBLIC_FILTER_TOGGLE_ID = 'publicFilterToggle';
+export const PUBLIC_FILTER_PANEL_ID = 'publicFilterPanel';
+export const PUBLIC_SPRINT_OPTION_ATTR = 'data-public-sprint-option';
+export const PUBLIC_PRIORITY_OPTION_ATTR = 'data-public-priority-option';
+
+/**
+ * Sprint and priority sections of the public filter popover. Only what the
+ * public API supports: All plus numbered sprints, All plus named priority
+ * tiers. Never Scheduled/Unscheduled, No Priority, assignee, or sort.
+ * Returns '' when the board offers neither filter.
+ */
+export function buildPublicFilterSectionsHtml(view: Pick<PublicBoardViewModel, 'snapshot' | 'query' | 'sprints'>): string {
+  let html = '';
   if (view.snapshot.project.sprintsEnabled && view.sprints.length > 0) {
-    const nameCount = new Map<string, number>();
-    for (const sprint of view.sprints) nameCount.set(sprint.name, (nameCount.get(sprint.name) ?? 0) + 1);
-    const options = view.sprints
-      .map((sprint) => `<option value="${sprint.number}"${view.query.sprintNumber === sprint.number ? ' selected' : ''}>${escapeHTML(sprintLabel(sprint, (nameCount.get(sprint.name) ?? 0) > 1))}</option>`)
-      .join('');
-    sprintSelect = `<label class="public-board-filter"><span class="public-board-sr-only"${attrI18n('text', 'board.filters.sprint')}>${escapeHTML(t('board.filters.sprint'))}</span><select class="search-input public-board-filter__select" id="publicSprintFilter"><option value=""${attrI18n('text', 'board.filters.allSprints')}>${escapeHTML(t('board.filters.allSprints'))}</option>${options}</select></label>`;
+    const options = buildSprintFilterOptions(view.sprints, {
+      includeScheduled: false,
+      // Public sprints carry no internal ID; the number is their project-local identity.
+      identity: (sprint) => sprint.number,
+    });
+    const current = view.query.sprintNumber == null ? '' : String(view.query.sprintNumber);
+    html += buildFilterPanelSectionHtml({
+      labelKey: 'board.filters.sprint',
+      optionsHtml: renderFilterOptionsHtml(options, current, { attr: PUBLIC_SPRINT_OPTION_ATTR, ariaPressed: true }),
+      sectionAttr: 'data-public-sprint-section',
+    });
   }
-
-  let prioritySelect = '';
   if (view.snapshot.priorities.length > 0) {
-    const options = view.snapshot.priorities
-      .map((priority) => `<option value="${escapeHTML(priority.key)}"${view.query.priority === priority.key ? ' selected' : ''}>${escapeHTML(priority.name)}</option>`)
-      .join('');
-    prioritySelect = `<label class="public-board-filter"><span class="public-board-sr-only"${attrI18n('text', 'board.filters.priority')}>${escapeHTML(t('board.filters.priority'))}</span><select class="search-input public-board-filter__select" id="publicPriorityFilter"><option value=""${attrI18n('text', 'board.filters.allPriorities')}>${escapeHTML(t('board.filters.allPriorities'))}</option>${options}</select></label>`;
+    const options = buildPriorityFilterOptions(view.snapshot.priorities, { includeNoPriority: false });
+    html += buildFilterPanelSectionHtml({
+      labelKey: 'board.filters.priority',
+      optionsHtml: renderFilterOptionsHtml(options, view.query.priority ?? '', { attr: PUBLIC_PRIORITY_OPTION_ATTR, ariaPressed: true }),
+      sectionAttr: 'data-public-priority-section',
+    });
   }
+  return html;
+}
 
-  return `
-    <div class="filters public-board-filters">
-      <div class="filters__label"${attrI18n('text', 'board.filters.label')}>${escapeHTML(t('board.filters.label'))}</div>
-      <div class="chips-wrapper"><div class="chips-viewport"><div class="chips" id="publicTagChips">${chips}</div></div></div>
-      ${sprintSelect}
-      ${prioritySelect}
-    </div>`;
+/** Drives the toggle's active pulse: a sprint or priority filter narrows the board. */
+export function isPublicPanelFilterActive(query: PublicBoardQuery): boolean {
+  return query.sprintNumber != null || !!query.priority;
 }
 
 export function buildPublicTopbarHtml(view: PublicBoardViewModel): string {
   const placeholderKey = view.isMobile ? 'board.search.placeholder.mobile' : 'board.search.placeholder.desktop';
   const clearLabel = escapeHTML(t('board.actions.clearSearch'));
   const badgeAria = escapeHTML(t('publicBoard.badgeAria'));
+  const sectionsHtml = buildPublicFilterSectionsHtml(view);
   return `
     <div class="topbar">
       <div class="brand public-board__project-name">${escapeHTML(view.snapshot.project.name)}</div>
@@ -196,6 +263,13 @@ export function buildPublicTopbarHtml(view: PublicBoardViewModel): string {
       <div class="search-input-wrapper">
         <input type="search" id="publicSearchInput" class="search-input" autocomplete="off" value="${escapeHTML(view.query.search)}" placeholder="${escapeHTML(t(placeholderKey))}" aria-label="${escapeHTML(t(placeholderKey))}"${attrI18n('placeholder', placeholderKey)}${attrI18n('aria-label', placeholderKey)} />
         <button class="search-clear" id="publicSearchClear" type="button" aria-label="${clearLabel}" title="${clearLabel}"${attrI18n('aria-label', 'board.actions.clearSearch')}${view.query.search ? '' : ' hidden'}>✕</button>
+        ${buildFilterPanelShellHtml({
+          toggleId: PUBLIC_FILTER_TOGGLE_ID,
+          panelId: PUBLIC_FILTER_PANEL_ID,
+          active: isPublicPanelFilterActive(view.query),
+          sectionsHtml,
+          toggleHidden: sectionsHtml === '',
+        })}
       </div>
       ${view.canSignIn ? `<button class="btn btn--ghost public-board__sign-in" type="button" id="publicSignInBtn"${attrI18n('text', 'auth.signIn.title')}>${escapeHTML(t('auth.signIn.title'))}</button>` : ''}
       ${view.user ? renderUserAvatar(view.user) : ''}
@@ -215,7 +289,7 @@ export function buildPublicBoardHtml(view: PublicBoardViewModel): string {
     <div class="page page--public-board" data-public-board-page>
       ${buildPublicTopbarHtml(view)}
       <div class="container">
-        ${buildPublicFiltersHtml(view)}
+        ${buildPublicOmniRowHtml()}
         ${noResults}
         <div class="mobile-board-wrapper">
           <div class="mobile-tabs" id="publicMobileTabs" role="tablist">${buildPublicMobileTabsHtml(view)}</div>
