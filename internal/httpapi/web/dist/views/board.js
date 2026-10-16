@@ -23,7 +23,7 @@ import { on, off } from '../events.js';
 import { recordLocalMutation, } from '../realtime/guard.js';
 import { buildBoardColumnsHtml, buildFiltersHtml, buildNoResultsHtml, buildOmniFilterRowHtml, buildTopbarHtml, buildPriorityTierMap, buildDoneColumnKeys, getBoardColumns, visibleBoardLaneCount, renderVoiceCommandTriggerHtml, renderTodoCard, } from './board-rendering.js';
 import { AGENDA_COLUMN_KEY, agendaEvents, agendaLaneColor, agendaLaneTitle, agendaMobileTabAriaLabel, agendaMobileTabInnerHtml, applyAgendaScrollAfterRender, buildAgendaColumnHtml, captureAgendaListScroll, flushAgendaInitialScroll, isAgendaEnabled } from './board-agenda.js';
-import { clearTodoMultiSelection, ensureBulkEditUi, getSelectedTodoIds, toggleTodoSelection, } from './board-selection.js';
+import { clearTodoMultiSelection, ensureBulkEditUi, getSelectedTodoIds, isSelectMode, pruneSelectionToRenderedBoard, selectRangeTo, toggleTodoSelection, } from './board-selection.js';
 import { bootstrapLoadedBoardView } from './board-load-bootstrap.js';
 import { bindBoardFilterUi, clearSprintChipData, clearSprintChipDataIfSlugChanged, computeBoardChipsRender, ensureSprintSubscription, getSprintChipDataForSlug, hasSprintChipDataForSlug, cancelPendingSearchReload, resetBoardFilterUiState, setSprintChipDataForSlug, updateChipsOnly, updateOmniTagPills, } from './board-filters.js';
 export { notifySprintStateChanged } from './board-filters.js';
@@ -368,7 +368,7 @@ function attachBoardDelegationHandlers() {
             const todo = findTodoInBoard(id);
             if (!todo)
                 return;
-            if (me.ctrlKey || me.metaKey) {
+            if (me.ctrlKey || me.metaKey || me.shiftKey || isSelectMode()) {
                 if (currentUserProjectRole === "viewer") {
                     clearTodoMultiSelection();
                     openTodoFromCard(todo);
@@ -376,7 +376,10 @@ function attachBoardDelegationHandlers() {
                 }
                 e.preventDefault();
                 e.stopPropagation();
-                toggleTodoSelection(id);
+                if (me.shiftKey)
+                    selectRangeTo(id);
+                else
+                    toggleTodoSelection(id);
                 return;
             }
             clearTodoMultiSelection();
@@ -1017,6 +1020,8 @@ function renderBoardFromData(board, projectId, tags, search, sprintId, assignee,
       <div class="container">
         ${filterRowHTML}
 
+        ${currentUserProjectRole === "viewer" ? "" : `<div class="board-select-row"><button type="button" class="btn btn--ghost board-select-toggle" id="boardSelectToggle" aria-pressed="${isSelectMode() ? "true" : "false"}" title="${escapeHTML(t("board.select.hint"))}">${escapeHTML(isSelectMode() ? t("board.select.done") : t("board.select.toggle"))}</button></div>`}
+
         <div class="mobile-board-wrapper">
           <div class="mobile-tabs" id="mobileTabs">
             ${buildMobileTabsInnerHtml(boardCols, {
@@ -1052,6 +1057,9 @@ function renderBoardFromData(board, projectId, tags, search, sprintId, assignee,
     const boardRoot = document.querySelector(".board");
     if (boardRoot)
         applyWrapLanesClass(boardRoot, visibleBoardLaneCount(board));
+    if (boardRoot)
+        boardRoot.classList.toggle("board--select-mode", isSelectMode());
+    pruneSelectionToRenderedBoard();
     applyAgendaScrollAfterRender({ restoreScrollTop: savedAgendaScroll, board });
     // Only attach event listeners for elements that exist (anonymous mode omits some)
     const brandLink = document.getElementById("brandLink");
