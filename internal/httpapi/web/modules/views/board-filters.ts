@@ -21,6 +21,7 @@ import {
   buildChipsHTML,
   getCombinedChipData,
   isBoardFilterActive,
+  normalizeSprintFilterValue,
   type ChipData,
   type SprintChipData,
 } from './board-rendering.js';
@@ -37,6 +38,7 @@ import {
   revealFocusedPinnedOmniPill,
   revealLastPinnedOmniPill,
   updateOmniChevrons,
+  type OmniPillTag,
   type OmniRowIds,
 } from './omni-tags.js';
 
@@ -126,6 +128,43 @@ export function matchOmniTags(query: string, tags: readonly Tag[], appliedTags: 
   return matchOmniTagCandidates(query, tags.filter((tag) => tag.count > 0), appliedTags, MAX_BOARD_TAG_FILTERS);
 }
 
+type SprintSuggestion = SprintChipData['sprints'][number];
+
+/** Sprint discovery uses the same exact/prefix/substring ranking as tags. */
+export function matchOmniSprints(
+  query: string,
+  sprintData: SprintChipData | null,
+  activeSprintId: string | null = null,
+): SprintSuggestion[] {
+  const current = normalizeSprintFilterValue(activeSprintId);
+  return matchOmniTagCandidates(query, sprintData?.sprints ?? [], [], Number.MAX_SAFE_INTEGER)
+    .filter((sprint) => String(sprint.number) !== current);
+}
+
+function sprintNameCounts(sprints: readonly SprintSuggestion[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const sprint of sprints) {
+    const key = sprint.name.toLocaleLowerCase();
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function sprintDisplayName(sprint: SprintSuggestion, counts: ReadonlyMap<string, number>): string {
+  return (counts.get(sprint.name.toLocaleLowerCase()) ?? 0) > 1
+    ? `${sprint.name} (${sprint.number})`
+    : sprint.name;
+}
+
+function selectedSprintDisplayName(sprintId: string, sprintData: SprintChipData | null): string {
+  const current = normalizeSprintFilterValue(sprintId);
+  if (current === 'scheduled') return t('board.filters.scheduled');
+  if (current === 'unscheduled') return t('board.filters.unscheduled');
+  const sprints = sprintData?.sprints ?? [];
+  const sprint = sprints.find((candidate) => String(candidate.number) === current);
+  return sprint ? sprintDisplayName(sprint, sprintNameCounts(sprints)) : `#${current}`;
+}
+
 function browseTimestamp(tag: Tag): number {
   if (!tag.lastActiveAt) return Number.NEGATIVE_INFINITY;
   const parsed = Date.parse(tag.lastActiveAt);
@@ -185,27 +224,54 @@ function syncOmniDesktopRailLayout(): void {
   revealLastPinnedOmniTag();
 }
 
-function renderOmniTagPills(board: Board | null = getBoard()): void {
+function renderOmniTagPills(
+  board: Board | null = getBoard(),
+  opts: { preserveUnchanged?: boolean } = {},
+): void {
   const elements = findOmniRowElements(document, MEMBER_OMNI_IDS);
   const input = document.getElementById('searchInput') as HTMLInputElement | null;
   if (!elements || !input || !board) return;
   const selectedTags = getTagsFromUrl();
-  const applied = selectedTags.map((selectedTag) => {
+  const applied: OmniPillTag[] = selectedTags.map((selectedTag) => {
     const selectedFromBoard = board.tags.find((tag) => tag.name.toLocaleLowerCase() === selectedTag.toLocaleLowerCase());
     return { name: selectedTag, color: selectedFromBoard?.color || getTagColors()[selectedTag] };
   });
+  const sprintData = boardSprintsEnabled(board) ? getSprintChipDataForSlug(getSlug()) : null;
+  const activeSprintId = getSprintIdFromUrl();
+  if (activeSprintId && boardSprintsEnabled(board)) {
+    applied.push({
+      name: selectedSprintDisplayName(activeSprintId, sprintData),
+      value: activeSprintId,
+      prefix: t('board.filters.sprint'),
+      clearAttr: 'data-omni-clear-sprint',
+      clearLabel: t('board.filters.allSprints'),
+    });
+  }
   const browseMode = input.value.trim() === '';
-  const candidates = browseMode
+  const tagCandidates = browseMode
     ? rankBrowseOmniTags(board.tags, selectedTags)
     : matchOmniTags(input.value, board.tags, selectedTags);
+  const candidates: OmniPillTag[] = tagCandidates.map((tag) => ({
+    name: tag.name,
+    color: tag.color || getTagColors()[tag.name],
+  }));
+  if (!browseMode && sprintData) {
+    const counts = sprintNameCounts(sprintData.sprints);
+    candidates.push(...matchOmniSprints(input.value, sprintData, activeSprintId).map((sprint) => ({
+      name: sprintDisplayName(sprint, counts),
+      value: String(sprint.number),
+      prefix: t('board.filters.sprint'),
+      attr: 'data-omni-sprint',
+    })));
+  }
   renderOmniRow(elements, buildOmniRowContent({
     applied,
-    candidates: candidates.map((tag) => ({ name: tag.name, color: tag.color || getTagColors()[tag.name] })),
+    candidates,
     browse: browseMode,
     attrs: { tag: 'data-omni-tag', clear: 'data-omni-clear-tag' },
     tone: 'accent',
     clearLabel: (name) => t('board.filters.clearTag', { name }),
-  }));
+  }), { preserveUnchanged: opts.preserveUnchanged });
 }
 
 export function updateOmniTagPills(board: Board | null = getBoard()): void {
@@ -223,19 +289,29 @@ function bindOmniTagPills(): void {
   bar.onkeydown = (event: KeyboardEvent) => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     const target = event.target instanceof Element
-      ? event.target.closest<HTMLButtonElement>('[data-omni-tag], [data-omni-clear-tag]')
+      ? event.target.closest<HTMLButtonElement>('[data-omni-tag], [data-omni-clear-tag], [data-omni-sprint], [data-omni-clear-sprint]')
       : null;
     if (!target) return;
     event.preventDefault();
     target.click();
   };
   bar.onclick = (event: MouseEvent) => {
-    const target = event.target instanceof Element ? event.target.closest('[data-omni-tag], [data-omni-clear-tag]') as HTMLElement | null : null;
+    const target = event.target instanceof Element
+      ? event.target.closest('[data-omni-tag], [data-omni-clear-tag], [data-omni-sprint], [data-omni-clear-sprint]') as HTMLElement | null
+      : null;
     if (!target) return;
     const input = document.getElementById('searchInput') as HTMLInputElement | null;
     if (target.hasAttribute('data-omni-clear-tag')) {
       const clearTag = target.getAttribute('data-omni-clear-tag') ?? '';
       setTagParams(getTagsFromUrl().filter((tag) => tag !== clearTag));
+    } else if (target.hasAttribute('data-omni-clear-sprint')) {
+      setSprintParam(null);
+    } else if (target.hasAttribute('data-omni-sprint')) {
+      cancelPendingSearchReload();
+      setSprintParam(target.getAttribute('data-omni-sprint'));
+      if (input) input.value = '';
+      document.getElementById('searchClear')?.remove();
+      setSearchParam('');
     } else {
       cancelPendingSearchReload();
       const nextTag = target.getAttribute('data-omni-tag') ?? '';
@@ -245,6 +321,8 @@ function bindOmniTagPills(): void {
       setTagParams([...getTagsFromUrl(), nextTag]);
     }
     renderOmniTagPills();
+    const toggle = document.getElementById('searchFilterToggle');
+    if (toggle) updateFilterToggleActiveState(toggle);
     input?.focus();
     reloadBoardWithCurrentFilters();
   };
@@ -424,7 +502,9 @@ function handleFilterPanelDocumentClick(e: MouseEvent): void {
         : kind === "priority"
           ? "data-priority-option"
           : "data-sprint-option";
-    const value = optionEl.getAttribute(attr) || null;
+    let value = optionEl.getAttribute(attr) || null;
+    // Picking the already selected sprint option clears the sprint filter.
+    if (kind === "sprint" && value === normalizeSprintFilterValue(getSprintIdFromUrl())) value = null;
     const label = optionEl.textContent?.trim() || "";
 
     if (kind === "assignee") {
@@ -441,9 +521,8 @@ function handleFilterPanelDocumentClick(e: MouseEvent): void {
       panel.querySelectorAll("[data-priority-option]").forEach((el) => el.classList.remove("is-active"));
     } else {
       setSprintParam(value);
-      panel.querySelectorAll("[data-sprint-option]").forEach((el) => el.classList.remove("is-active"));
     }
-    optionEl.classList.add("is-active");
+    if (kind !== "sprint") optionEl.classList.add("is-active");
 
     if (value) {
       showToast(t(kind === "sort" ? "board.filters.sortedBy" : "board.filters.filteringOn", { value: label }));
@@ -451,6 +530,7 @@ function handleFilterPanelDocumentClick(e: MouseEvent): void {
 
     updateFilterToggleActiveState(toggle);
     closeFilterPopover(panel, toggle);
+    if (kind === "sprint") syncSprintFilterSection(getBoard(), value);
 
     reloadBoardFn?.(
       getSlug(),
@@ -684,14 +764,42 @@ export function clearSprintChipData(): void {
   lastSprintsDataSlug = null;
 }
 
+/**
+ * Inserts, replaces, or removes the Omni Sprint section so it follows the
+ * loaded sprint collection and the active sprint filter, leaving the rest of
+ * the popover (other sections, toggle, search input) untouched. A focused
+ * sprint option keeps focus when it still exists after the update.
+ */
+function syncSprintFilterSection(board: Board | null, sprintId: string | null): void {
+  const panel = document.getElementById("searchFilterPanel");
+  if (!panel) return;
+  const html = boardSprintsEnabled(board) ? buildSprintFilterSectionHtml(sprintId, getSprintChipDataForSlug(getSlug())) : "";
+  const existing = panel.querySelector("[data-sprint-filter-section]");
+  const active = document.activeElement;
+  const focusedValue = existing && active instanceof HTMLElement && existing.contains(active)
+    ? active.getAttribute("data-sprint-option")
+    : null;
+  if (existing && html) existing.outerHTML = html;
+  else if (existing) existing.remove();
+  else if (html) panel.insertAdjacentHTML("afterbegin", html);
+  else return;
+  const toggle = document.getElementById("searchFilterToggle");
+  if (focusedValue !== null) {
+    const same = panel.hidden
+      ? null
+      : Array.from(panel.querySelectorAll<HTMLElement>("[data-sprint-option]"))
+        .find((el) => el.getAttribute("data-sprint-option") === focusedValue);
+    (same ?? toggle)?.focus();
+  }
+  if (!panel.hidden && toggle) positionFilterPopover(panel, toggle);
+}
+
 export function updateChipsOnly(sprintId: string | null): void {
   const board = getBoard();
   if (!board) return;
   if (getBoardFilterLayoutPreference() === 'omni') {
-    const section = document.querySelector('[data-sprint-filter-section]');
-    if (section && boardSprintsEnabled(board)) {
-      section.outerHTML = buildSprintFilterSectionHtml(sprintId, lastSprintsData);
-    }
+    syncSprintFilterSection(board, sprintId);
+    renderOmniTagPills(board, { preserveUnchanged: true });
     const toggle = document.getElementById('searchFilterToggle');
     if (toggle) updateFilterToggleActiveState(toggle);
     return;
