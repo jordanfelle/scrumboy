@@ -356,6 +356,11 @@ function attachBoardDelegationHandlers() {
     if (boardEl[BOUND_FLAG])
         return;
     boardEl[BOUND_FLAG] = true;
+    // Shift+click range select must not also start a native text selection across the cards.
+    boardEl.addEventListener("mousedown", (e) => {
+        if (e.shiftKey && e.target.closest("[data-todo-id]"))
+            e.preventDefault();
+    });
     boardEl.addEventListener("click", (e) => {
         const card = e.target.closest("[data-todo-id]");
         if (card) {

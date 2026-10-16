@@ -242,4 +242,34 @@ describe("board selection i18n", () => {
     expect(hint.hidden).toBe(false);
     expect(hint.textContent).toBe("7 more not loaded");
   });
+
+  it("keeps selections in a lane hidden by the mobile tab strip when pruning, and select all is additive", async () => {
+    const selection = await loadSelectionModule();
+    selection.toggleTodoSelection(4);
+    (document.querySelectorAll(".col")[1] as HTMLElement).style.display = "none";
+
+    selection.pruneSelectionToRenderedBoard();
+    expect(Array.from(selection.getSelectedTodoIds())).toEqual([4]);
+
+    selection.selectAllVisible();
+    expect(Array.from(selection.getSelectedTodoIds()).sort()).toEqual([1, 2, 3, 4]);
+  });
+
+  it("refreshes the select-all count after a render adds cards and Clear keeps select mode", async () => {
+    const selection = await loadSelectionModule();
+    selection.selectAllVisible();
+    expect(document.getElementById("bulkSelectAllBtn")?.textContent).toBe("Select all (5)");
+    const extra = document.createElement("button");
+    extra.setAttribute("data-todo-id", "6");
+    document.querySelector(".col__list")?.appendChild(extra);
+
+    selection.pruneSelectionToRenderedBoard();
+    expect(document.getElementById("bulkSelectAllBtn")?.textContent).toBe("Select all (6)");
+    expect((document.getElementById("bulkSelectAllBtn") as HTMLButtonElement).disabled).toBe(false);
+
+    selection.setSelectMode(true);
+    selection.clearTodoMultiSelection({ keepSelectMode: true });
+    expect(selection.isSelectMode()).toBe(true);
+    expect(selection.getSelectedTodoIds().size).toBe(0);
+  });
 });
