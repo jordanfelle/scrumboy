@@ -127,6 +127,7 @@ let currentUserProjectRole: string | null = null;
 // Track last project ID we fetched members for to prevent duplicate fetches
 let lastFetchedProjectId: number | null = null;
 let boardLoadSequence = 0;
+let sprintVocabularyLoadSequence = 0;
 let resolverController: AbortController | null = null;
 let highlightRafId: number | null = null;
 let highlightTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -1799,6 +1800,26 @@ function priorityFilterExistsOnBoard(board: Board, priority: string | null): boo
   return (board.priorityOrder ?? []).some((tier) => tier.key === priority);
 }
 
+async function loadSprintVocabulary(slug: string, isCurrent: () => boolean): Promise<void> {
+  const requestSeq = ++sprintVocabularyLoadSequence;
+  try {
+    const sprintsResp = await apiFetch<SprintChipData | null>(`/api/board/${slug}/sprints`);
+    if (requestSeq !== sprintVocabularyLoadSequence || !isCurrent() || getSlug() !== slug) return;
+    if (!boardSprintsEnabled(getBoard())) {
+      clearSprintChipData();
+      updateChipsOnly(getSprintIdFromUrl());
+      return;
+    }
+    const sprints = normalizeSprints(sprintsResp);
+    setSprintChipDataForSlug(slug, sprints.length > 0 ? { ...(sprintsResp || {}), sprints } : null);
+    updateChipsOnly(getSprintIdFromUrl());
+  } catch {
+    if (requestSeq !== sprintVocabularyLoadSequence || !isCurrent() || getSlug() !== slug) return;
+    clearSprintChipData();
+    updateChipsOnly(getSprintIdFromUrl());
+  }
+}
+
 // Load board by slug
 export async function loadBoardBySlug(slug: string | null, tags: readonly string[], search: string | null, sprintId: string | null = null, assignee: string | null = null, sort: string | null = null, priority: string | null = null): Promise<void> {
   ensureBoardI18nBinding();
@@ -1887,26 +1908,11 @@ export async function loadBoardBySlug(slug: string | null, tags: readonly string
   debugLog("loadBoardBySlug end (success)", slug);
 
   if (!boardSprintsEnabled(board)) {
+    sprintVocabularyLoadSequence++;
     clearSprintChipData();
   } else if (!isAnonymousBoard(board) && !hasSprintChipDataForSlug(slug)) {
     setSprintChipDataForSlug(slug, null);
-    apiFetch<SprintChipData | null>(`/api/board/${slug}/sprints`)
-      .then((sprintsResp) => {
-        if (requestSeq !== boardLoadSequence) return;
-        if (!boardSprintsEnabled(getBoard())) {
-          clearSprintChipData();
-          return;
-        }
-        const sprints = normalizeSprints(sprintsResp);
-        setSprintChipDataForSlug(slug, sprints.length > 0 ? { ...(sprintsResp || {}), sprints } : null);
-        if (getSlug() === requestSlug) {
-          updateChipsOnly(requestSprintId);
-        }
-      })
-      .catch(() => {
-        if (requestSeq !== boardLoadSequence) return;
-        clearSprintChipData();
-      });
+    void loadSprintVocabulary(slug, () => requestSeq === boardLoadSequence && getSlug() === requestSlug);
   }
 }
 
@@ -1919,14 +1925,7 @@ registerBoardRefresher(async (slug: string, tags: readonly string[], search?: st
 registerSprintsRefresher(async (slug: string) => {
   if (getSlug() !== slug) return;
   if (!boardSprintsEnabled(getBoard())) return;
-  try {
-    const sprintsResp = await apiFetch<SprintChipData | null>(`/api/board/${slug}/sprints`);
-    const sprints = normalizeSprints(sprintsResp);
-    setSprintChipDataForSlug(slug, sprints.length > 0 ? { ...(sprintsResp || {}), sprints } : null);
-    if (getSlug() === slug) updateChipsOnly(getSprintIdFromUrl());
-  } catch {
-    clearSprintChipData();
-  }
+  await loadSprintVocabulary(slug, () => getSlug() === slug);
 });
 
 ensureSprintSubscription();
@@ -2046,27 +2045,11 @@ export async function renderBoard(
     if (!rendered) return;
     if (getSlug() === slug) connectBoardEvents(slug);
     if (!boardSprintsEnabled(board)) {
+      sprintVocabularyLoadSequence++;
       clearSprintChipData();
     } else if (!isAnonymousBoard(board) && !hasSprintChipDataForSlug(slug)) {
       setSprintChipDataForSlug(slug, null);
-      apiFetch<SprintChipData | null>(`/api/board/${slug}/sprints`)
-        .then((sprintsResp) => {
-          if (getSlug() !== slug) return;
-          if (!boardSprintsEnabled(getBoard())) {
-            clearSprintChipData();
-            return;
-          }
-          const sprints = normalizeSprints(sprintsResp);
-          setSprintChipDataForSlug(slug, sprints.length > 0 ? { ...(sprintsResp || {}), sprints } : null);
-          if (getSlug() === slug) {
-            updateChipsOnly(sprintId);
-          }
-        })
-        .catch(() => {
-          if (getSlug() === slug) {
-            clearSprintChipData();
-          }
-        });
+      void loadSprintVocabulary(slug, () => getSlug() === slug);
     }
   } else if (!opts.skipLoad) {
     setInitialBoardLoadInFlight(slug);
