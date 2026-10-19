@@ -2,6 +2,34 @@
 
 > **Upgrades:** No breaking changes for **3.7.0 ≤ v ≤ 3.38.x** unless noted below. Notable upgrade impact: **3.22.0** (MCP/OAuth), **3.24.0** (MCP tool names), **3.26.0** (MCP project tags), **3.29.0** (MCP JSON-RPC error/`board_get` identity), **3.30.0** (reversible per-project sprint capability), **3.31.0** (per-project priority tiers), **3.33.0** (Agenda ICS feeds need `SCRUMBOY_ENCRYPTION_KEY`), **3.33.12** (webhook destinations must be publicly routable), **3.35.0** (backup format 1.2; Trello closed-card titles) - see those releases.
 
+## [3.38.10] - 2026-10-19
+
+### Added
+
+- **Board bulk selection: range select, select all, and touch select mode** -
+  Ctrl/⌘+click multi-select gains **Shift+click** range selection (inclusive
+  range from the last-clicked card, lane by lane in on-screen order),
+  **Ctrl/⌘+A** and a **Select all (N)** bar button that select every card
+  currently shown, and a **Select** toggle above the board for touch users
+  (checkboxes on cards, plain-tap toggling, **Done** to exit). Select all
+  respects board filters (tags, search, sprint, assignee, priority) and skips
+  lanes hidden by the mobile tab strip; the selection is pruned to the
+  rendered board after re-renders and filter changes. The bulk bar appears
+  from the first selected card with **Clear**, a count of matching todos not
+  yet loaded (lanes with "load more"), and **Esc** clears the selection.
+  Frontend-only; no API, authentication, or data-projection change.
+
+### Fixed
+
+- **Bulk selection lifecycle and accessibility hardening** - The bulk bar
+  refreshes after every render (load-more, realtime additions), select all is
+  additive and disabled only when every shown card is selected, and
+  Clear/Esc keep select mode while cards remain selected. Shift+mousedown no
+  longer starts a native text selection, and selected cards expose
+  `aria-pressed` kept in sync with highlight state. The bulk edit dialog
+  ignores duplicate submits and checkbox churn while an apply is in flight.
+  Viewers remain single-select: modifier clicks open one todo for them.
+
 ## [3.38.9] - 2026-10-18
 
 ### Fixed
