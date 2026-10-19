@@ -132,6 +132,13 @@ function updateApplyButtonState(): void {
   const els = getBulkFormEls();
   const saveBtn = els.saveBtn;
   if (!saveBtn) return;
+  const form = bulkEditForm as HTMLFormElement | null;
+  // An in-flight apply owns the button until it settles (success or failure):
+  // checkbox churn mid-flight must not re-enable Apply.
+  if (form && (form as any).__bulkApplying) {
+    saveBtn.disabled = true;
+    return;
+  }
   const any =
     !!(els.applyAssign?.checked ||
       els.applySprint?.checked ||
@@ -456,9 +463,18 @@ export function initBulkEditDialog(
 
   form?.addEventListener("submit", async (e) => {
     e.preventDefault();
+    if ((form as any).__bulkApplying) return;
     const ids = (form as any).__bulkTodoIds as number[] | undefined;
     if (!ids || ids.length === 0) return;
-    await runBulkApply(ids);
+    (form as any).__bulkApplying = true;
+    const saveBtn = document.getElementById("saveBulkEditBtn") as HTMLButtonElement | null;
+    if (saveBtn) saveBtn.disabled = true;
+    try {
+      await runBulkApply(ids);
+    } finally {
+      (form as any).__bulkApplying = false;
+      updateApplyButtonState();
+    }
     (bulkEditDialog as HTMLDialogElement | null)?.close();
     onSuccess();
   });

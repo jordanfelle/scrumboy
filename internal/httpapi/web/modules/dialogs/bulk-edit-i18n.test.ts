@@ -60,6 +60,9 @@ vi.mock('../state/selectors.js', () => ({
   getTagsFromUrl: () => selectorState.tag ? [selectorState.tag] : [],
   getSearch: () => selectorState.search,
   getSprintIdFromUrl: () => selectorState.sprintId,
+  getAssigneeFromUrl: () => null,
+  getSortFromUrl: () => null,
+  getPriorityFromUrl: () => null,
   getBoardMembers: () => selectorState.boardMembers,
 }));
 
@@ -204,5 +207,47 @@ describe('bulk edit i18n', () => {
     await flushPromises();
 
     expect(apiFetchMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps Apply disabled while a bulk apply is in flight, even on failure', async () => {
+    await initI18n('en');
+    const bulkEdit = await import('./bulk-edit.js');
+    const onSuccess = vi.fn();
+    bulkEdit.initBulkEditDialog(onSuccess);
+    await bulkEdit.openBulkEditDialog([1, 2], { role: 'maintainer', onPruned: vi.fn() });
+    await flushPromises();
+
+    // A status move keeps the apply asynchronous so the mid-flight window is observable.
+    const applyStatus = document.getElementById('bulkApplyStatus') as HTMLInputElement;
+    const statusSel = document.getElementById('bulkStatus') as HTMLSelectElement;
+    const saveBtn = document.getElementById('saveBulkEditBtn') as HTMLButtonElement;
+    const form = document.getElementById('bulkEditForm') as HTMLFormElement;
+    applyStatus.checked = true;
+    statusSel.value = 'done';
+    applyStatus.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(saveBtn.disabled).toBe(false);
+
+    const pending: Array<(value: unknown) => void> = [];
+    // First PATCH fails; the rest succeed: the busy guard must hold either way.
+    apiFetchMock.mockImplementationOnce(() => Promise.reject(new Error('boom')));
+    apiFetchMock.mockImplementation(() => new Promise((resolve) => { pending.push(resolve as (value: unknown) => void); }));
+    form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+    await flushPromises(3);
+    expect((form as any).__bulkApplying).toBe(true);
+
+    // Checkbox churn mid-flight must not re-enable Apply.
+    applyStatus.checked = false;
+    applyStatus.dispatchEvent(new Event('change', { bubbles: true }));
+    applyStatus.checked = true;
+    applyStatus.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(saveBtn.disabled).toBe(true);
+
+    // Drain every pending request, then the submit settles and the dialog closes.
+    for (let i = 0; i < 20 && !onSuccess.mock.calls.length; i++) {
+      pending.splice(0).forEach((resolve) => resolve({}));
+      await flushPromises(4);
+    }
+    expect(onSuccess).toHaveBeenCalled();
+    expect((form as any).__bulkApplying).toBe(false);
   });
 });

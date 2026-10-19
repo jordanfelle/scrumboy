@@ -219,7 +219,8 @@ export function renderTodoCard(
 ): string {
   const content = renderStoryCardContent(todo, membersByUserId, opts);
   const borderStyle = columnColor ? ` style="border-color:${escapeHTML(columnColor)}"` : "";
-  const selectedClass = opts?.selectedIds?.has(todo.id) ? " card--selected" : "";
+  const isSelected = opts?.selectedIds?.has(todo.id) ?? false;
+  const selectedClass = isSelected ? " card--selected" : "";
   const doneKey = (todo.columnKey || todo.status || "").toLowerCase();
   const overdue = !todo.archivedAt
     && isOverdue(todo.dueAt, opts?.doneColumnKeys?.has(doneKey) ?? false);
@@ -244,7 +245,7 @@ export function renderTodoCard(
       </div>
     `;
   return `
-    <button class="card card--${todo.status.toLowerCase()}${selectedClass}"${borderStyle} data-todo-id="${todo.id}" data-todo-local-id="${todo.localId}"${todo.assigneeUserId != null ? ` data-assignee-user-id="${todo.assigneeUserId}"` : ""} id="todo_${todo.id}" type="button">
+    <button class="card card--${todo.status.toLowerCase()}${selectedClass}"${borderStyle} data-todo-id="${todo.id}" data-todo-local-id="${todo.localId}"${todo.assigneeUserId != null ? ` data-assignee-user-id="${todo.assigneeUserId}"` : ""} id="todo_${todo.id}" type="button" aria-pressed="${isSelected ? "true" : "false"}">
       ${content}
       <div class="card__top-actions">${overdueWarningHTML}${dragHandleHTML}</div>
     </button>

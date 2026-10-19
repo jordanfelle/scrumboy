@@ -78,7 +78,12 @@ import {
   clearTodoMultiSelection,
   ensureBulkEditUi,
   getSelectedTodoIds,
+  isSelectMode,
+  pruneSelectionToRenderedBoard,
+  selectRangeTo,
+  syncSelectionClasses,
   toggleTodoSelection,
+  updateBulkEditBar,
 } from './board-selection.js';
 import { bootstrapLoadedBoardView } from './board-load-bootstrap.js';
 import {
@@ -473,6 +478,11 @@ function attachBoardDelegationHandlers(): void {
   if ((boardEl as any)[BOUND_FLAG]) return;
   (boardEl as any)[BOUND_FLAG] = true;
 
+  // Shift+click range select must not also start a native text selection across the cards.
+  boardEl.addEventListener("mousedown", (e: Event) => {
+    if ((e as MouseEvent).shiftKey && (e.target as HTMLElement).closest("[data-todo-id]")) e.preventDefault();
+  });
+
   boardEl.addEventListener("click", (e: Event) => {
     const card = (e.target as HTMLElement).closest("[data-todo-id]");
     if (card) {
@@ -482,7 +492,7 @@ function attachBoardDelegationHandlers(): void {
       const id = Number(card.getAttribute("data-todo-id"));
       const todo = findTodoInBoard(id);
       if (!todo) return;
-      if (me.ctrlKey || me.metaKey) {
+      if (me.ctrlKey || me.metaKey || me.shiftKey || isSelectMode()) {
         if (currentUserProjectRole === "viewer") {
           clearTodoMultiSelection();
           openTodoFromCard(todo);
@@ -490,7 +500,8 @@ function attachBoardDelegationHandlers(): void {
         }
         e.preventDefault();
         e.stopPropagation();
-        toggleTodoSelection(id);
+        if (me.shiftKey) selectRangeTo(id);
+        else toggleTodoSelection(id);
         return;
       }
       clearTodoMultiSelection();
@@ -548,15 +559,7 @@ function attachBoardDelegationHandlers(): void {
 
   ensureBulkEditUi({
     getRole: () => currentUserProjectRole,
-    syncSelectionClasses: (selectedIds) => {
-      const currentBoardEl = document.querySelector(".board");
-      if (!currentBoardEl) return;
-      currentBoardEl.querySelectorAll("[data-todo-id]").forEach((el) => {
-        const id = Number((el as HTMLElement).getAttribute("data-todo-id"));
-        if (!Number.isFinite(id)) return;
-        el.classList.toggle("card--selected", selectedIds.has(id));
-      });
-    },
+    syncSelectionClasses,
   });
 }
 
@@ -641,6 +644,7 @@ export async function handleLoadMore(status: TodoStatus): Promise<void> {
     const countEl = document.querySelector(`[data-count-for="${status}"]`);
     if (countEl) {
       countEl.textContent = String(getLaneDisplayCount(status));
+    updateBulkEditBar();
     }
 
     updateMobileTabs();
@@ -716,6 +720,7 @@ function bindMobileTabClickHandlersIfNeeded(): void {
             localStorage.setItem(`mobileTab_${slug}`, tab);
           }
           updateMobileTabs();
+          updateBulkEditBar();
         }
       });
       (el as any)[BOUND_FLAG] = true;
@@ -907,7 +912,7 @@ function syncTopbarFromBoard(board: { project: { image?: string } }): void {
 
 // Full board + filters update. Use for SSE refresh, filter change, search.
 // For chips-only updates (e.g. deferred sprints load), use updateChipsOnly instead.
-function updateBoardContent(board: Board, tags: readonly string[], search: string, sprintId: string | null, assignee: string | null, sort: string | null, priority: string | null): void {
+export function updateBoardContent(board: Board, tags: readonly string[], search: string, sprintId: string | null, assignee: string | null, sort: string | null, priority: string | null): void {
   const tagsKey = JSON.stringify(tags);
   // Skip full rebuild when render signature matches (board + ordered tags + search + sprintId + assignee + sort + priority)
   if (
@@ -999,6 +1004,7 @@ function updateBoardContent(board: Board, tags: readonly string[], search: strin
     }
   }
 
+  pruneSelectionToRenderedBoard();
   syncMobileLaneTabsStrip(board);
   updateMobileTabs();
 
@@ -1147,6 +1153,8 @@ function renderBoardFromData(board: Board, projectId: number, tags: readonly str
       <div class="container">
         ${filterRowHTML}
 
+        ${currentUserProjectRole === "viewer" ? "" : `<div class="board-select-row"><button type="button" class="btn btn--ghost board-select-toggle" id="boardSelectToggle" aria-pressed="${isSelectMode() ? "true" : "false"}" title="${escapeHTML(t("board.select.hint"))}">${escapeHTML(isSelectMode() ? t("board.select.done") : t("board.select.toggle"))}</button></div>`}
+
         <div class="mobile-board-wrapper">
           <div class="mobile-tabs" id="mobileTabs">
             ${buildMobileTabsInnerHtml(boardCols, {
@@ -1182,6 +1190,8 @@ function renderBoardFromData(board: Board, projectId: number, tags: readonly str
 
   const boardRoot = document.querySelector(".board");
   if (boardRoot) applyWrapLanesClass(boardRoot, visibleBoardLaneCount(board));
+  if (boardRoot) boardRoot.classList.toggle("board--select-mode", isSelectMode());
+  pruneSelectionToRenderedBoard();
   applyAgendaScrollAfterRender({ restoreScrollTop: savedAgendaScroll, board });
 
   // Only attach event listeners for elements that exist (anonymous mode omits some)
