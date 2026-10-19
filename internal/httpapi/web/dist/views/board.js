@@ -23,7 +23,7 @@ import { on, off } from '../events.js';
 import { recordLocalMutation, } from '../realtime/guard.js';
 import { buildBoardColumnsHtml, buildFiltersHtml, buildNoResultsHtml, buildOmniFilterRowHtml, buildTopbarHtml, buildPriorityTierMap, buildDoneColumnKeys, getBoardColumns, visibleBoardLaneCount, renderVoiceCommandTriggerHtml, renderTodoCard, } from './board-rendering.js';
 import { AGENDA_COLUMN_KEY, agendaEvents, agendaLaneColor, agendaLaneTitle, agendaMobileTabAriaLabel, agendaMobileTabInnerHtml, applyAgendaScrollAfterRender, buildAgendaColumnHtml, captureAgendaListScroll, flushAgendaInitialScroll, isAgendaEnabled } from './board-agenda.js';
-import { clearTodoMultiSelection, ensureBulkEditUi, getSelectedTodoIds, isSelectMode, pruneSelectionToRenderedBoard, selectRangeTo, toggleTodoSelection, } from './board-selection.js';
+import { clearTodoMultiSelection, ensureBulkEditUi, getSelectedTodoIds, isSelectMode, pruneSelectionToRenderedBoard, selectRangeTo, syncSelectionClasses, toggleTodoSelection, updateBulkEditBar, } from './board-selection.js';
 import { bootstrapLoadedBoardView } from './board-load-bootstrap.js';
 import { bindBoardFilterUi, clearSprintChipData, clearSprintChipDataIfSlugChanged, computeBoardChipsRender, ensureSprintSubscription, getSprintChipDataForSlug, hasSprintChipDataForSlug, cancelPendingSearchReload, resetBoardFilterUiState, setSprintChipDataForSlug, updateChipsOnly, updateOmniTagPills, } from './board-filters.js';
 export { notifySprintStateChanged } from './board-filters.js';
@@ -444,17 +444,7 @@ function attachBoardDelegationHandlers() {
     });
     ensureBulkEditUi({
         getRole: () => currentUserProjectRole,
-        syncSelectionClasses: (selectedIds) => {
-            const currentBoardEl = document.querySelector(".board");
-            if (!currentBoardEl)
-                return;
-            currentBoardEl.querySelectorAll("[data-todo-id]").forEach((el) => {
-                const id = Number(el.getAttribute("data-todo-id"));
-                if (!Number.isFinite(id))
-                    return;
-                el.classList.toggle("card--selected", selectedIds.has(id));
-            });
-        },
+        syncSelectionClasses,
     });
 }
 function openTodoFromCard(todo) {
@@ -541,6 +531,7 @@ export async function handleLoadMore(status) {
         const countEl = document.querySelector(`[data-count-for="${status}"]`);
         if (countEl) {
             countEl.textContent = String(getLaneDisplayCount(status));
+            updateBulkEditBar();
         }
         updateMobileTabs();
     }
@@ -616,6 +607,7 @@ function bindMobileTabClickHandlersIfNeeded() {
                         localStorage.setItem(`mobileTab_${slug}`, tab);
                     }
                     updateMobileTabs();
+                    updateBulkEditBar();
                 }
             });
             el[BOUND_FLAG] = true;
@@ -810,7 +802,7 @@ function syncTopbarFromBoard(board) {
 }
 // Full board + filters update. Use for SSE refresh, filter change, search.
 // For chips-only updates (e.g. deferred sprints load), use updateChipsOnly instead.
-function updateBoardContent(board, tags, search, sprintId, assignee, sort, priority) {
+export function updateBoardContent(board, tags, search, sprintId, assignee, sort, priority) {
     const tagsKey = JSON.stringify(tags);
     // Skip full rebuild when render signature matches (board + ordered tags + search + sprintId + assignee + sort + priority)
     if (board === lastUpdateBoardContentBoard &&
@@ -892,6 +884,7 @@ function updateBoardContent(board, tags, search, sprintId, assignee, sort, prior
             }
         }
     }
+    pruneSelectionToRenderedBoard();
     syncMobileLaneTabsStrip(board);
     updateMobileTabs();
     // DnD must run after mobile tab strip DOM is final (Sortable binds #tab_drop_* inside #mobileTabDropZones).

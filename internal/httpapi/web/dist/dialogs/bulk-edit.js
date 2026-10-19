@@ -118,6 +118,13 @@ function updateApplyButtonState() {
     const saveBtn = els.saveBtn;
     if (!saveBtn)
         return;
+    const form = bulkEditForm;
+    // An in-flight apply owns the button until it settles (success or failure):
+    // checkbox churn mid-flight must not re-enable Apply.
+    if (form && form.__bulkApplying) {
+        saveBtn.disabled = true;
+        return;
+    }
     const any = !!(els.applyAssign?.checked ||
         els.applySprint?.checked ||
         els.applyStatus?.checked ||
@@ -427,10 +434,22 @@ export function initBulkEditDialog(onSuccess) {
     });
     form?.addEventListener("submit", async (e) => {
         e.preventDefault();
+        if (form.__bulkApplying)
+            return;
         const ids = form.__bulkTodoIds;
         if (!ids || ids.length === 0)
             return;
-        await runBulkApply(ids);
+        form.__bulkApplying = true;
+        const saveBtn = document.getElementById("saveBulkEditBtn");
+        if (saveBtn)
+            saveBtn.disabled = true;
+        try {
+            await runBulkApply(ids);
+        }
+        finally {
+            form.__bulkApplying = false;
+            updateApplyButtonState();
+        }
         bulkEditDialog?.close();
         onSuccess();
     });

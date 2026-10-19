@@ -5015,10 +5015,25 @@ label:has(input[type="radio"][name="importMode"]:disabled) {
   white-space: nowrap;
 }
 
+.bulk-edit-bar {
+  flex-wrap: wrap;
+  justify-content: center;
+  row-gap: var(--s-8);
+}
+
 .board-select-row {
   display: flex;
   justify-content: flex-end;
   margin-bottom: var(--s-8);
+}
+
+.bulk-edit-bar__btn,
+.bulk-edit-bar__hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .board-select-toggle[aria-pressed="true"] {
@@ -5296,6 +5311,14 @@ label:has(input[type="radio"][name="importMode"]:disabled) {
 
   .bulk-edit-bar__btn {
     min-height: 44px;
+  }
+
+  /* Narrow widths: the unloaded-stories warning takes its own row and wraps instead of
+     truncating, so it stays readable on touchscreens with no hover tooltip. */
+  .bulk-edit-bar__hint {
+    flex-basis: 100%;
+    white-space: normal;
+    text-align: center;
   }
 
   #todoDialog .dialog__footer #archiveTodoBtn,
