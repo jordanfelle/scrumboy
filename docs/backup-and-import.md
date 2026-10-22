@@ -113,6 +113,7 @@ New exports explicitly include:
 - Todo `priorityKey` — `null` means no priority assigned
 - Todo `archivedAt` — a Unix-millisecond timestamp for archived stories, or explicit `null` for active stories
 - Todo `dueAt` — a Unix-millisecond due date, **omitted** when the story has none (so exports that use no due dates are unchanged); an importing server that predates due dates rejects the unknown field. `dueAt` must be after the epoch and before year 2100
+- Project `customFields` (definitions: `key`, `name`, `type` of `text`/`url`/`number`, `position`) and todo `customFields` (key → string or number) — both **omitted** when unused. Import matches definitions by key (an existing key with a different type is rejected), validates every value against its definition, and rejects a value for an undefined field. An absent todo `customFields` preserves that todo’s existing values on merge.
 
 During **matched-project merge**:
 
