@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -198,6 +197,52 @@ func TestImportMergeRegeneratedLocalIDIsNotCapturedByLaterBackupTodo(t *testing.
 	assertStrings(t, "links", linksByTitle(t, sqlDB, p.ID), []string{"two -parent-> four"})
 }
 
+// TestImportMergeLinksMirrorBackup pins the Merge link contract: a matched project's links are
+// replaced by the backup's, so a backup without links removes them all, including links between
+// stories the backup does not contain. Those stories, their values and wall placements (the
+// backup has no wall field) are kept, and other projects are untouched.
+func TestImportMergeLinksMirrorBackup(t *testing.T) {
+	st, sqlDB, ctx, p := setupImportIdentityProject(t)
+	todos := createIdentityTodos(t, st, ctx, p.ID, ModeFull, "one", "two", "three")
+	other, err := st.CreateProject(ctx, "Identity Other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateCustomField(ctx, other.ID, "ref", "Ref", CustomFieldText); err != nil {
+		t.Fatal(err)
+	}
+	otherTodos := createIdentityTodos(t, st, ctx, other.ID, ModeFull, "x", "y")
+	for _, l := range []struct {
+		projectID int64
+		from, to  Todo
+	}{{p.ID, todos[0], todos[1]}, {p.ID, todos[1], todos[2]}, {other.ID, otherTodos[0], otherTodos[1]}} {
+		if err := st.AddLink(ctx, l.projectID, l.from.LocalID, l.to.LocalID, "blocks", ModeFull); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := st.PinWallStory(ctx, p.ID, todos[2].LocalID, 30, 40); err != nil {
+		t.Fatal(err)
+	}
+	data := exportIdentityProject(t, st, ctx, p.Slug)
+	data.Projects[0].Todos = data.Projects[0].Todos[:2] // "three" is not in the backup
+	data.Projects[0].Links = nil
+	data.Projects[0].Wall = nil
+	otherBefore := linksByTitle(t, sqlDB, other.ID)
+
+	if _, err := st.ImportProjects(ctx, data, ModeFull, "merge"); err != nil {
+		t.Fatalf("merge import: %v", err)
+	}
+	assertStrings(t, "links", linksByTitle(t, sqlDB, p.ID), nil)
+	assertStrings(t, "other links", linksByTitle(t, sqlDB, other.ID), otherBefore)
+	if refs := customFieldRefsByTitle(t, sqlDB, p.ID); refs["three"] != "ref-three" || len(refs) != 3 {
+		t.Fatalf("custom field refs = %v", refs)
+	}
+	if refs := customFieldRefsByTitle(t, sqlDB, other.ID); refs["x"] != "ref-x" || refs["y"] != "ref-y" {
+		t.Fatalf("other refs = %v", refs)
+	}
+	assertStrings(t, "placements", wallPlacementsByTitle(t, sqlDB, p.ID), []string{"three@30,40"})
+}
+
 func TestImportIntoBoardRemapsOverlappingLocalIDsPerSourceProject(t *testing.T) {
 	st, sqlDB, _ := setupAssetOwnerStore(t)
 	base := context.Background()
@@ -360,25 +405,81 @@ func TestImportMergeFailureAfterRemapLeavesDataUnchanged(t *testing.T) {
 	if err := st.AddLink(ctx, p.ID, todos[0].LocalID, todos[2].LocalID, "blocks", ModeFull); err != nil {
 		t.Fatal(err)
 	}
+	other, err := st.CreateProject(ctx, "Identity Bystander")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateCustomField(ctx, other.ID, "ref", "Ref", CustomFieldText); err != nil {
+		t.Fatal(err)
+	}
+	otherTodos := createIdentityTodos(t, st, ctx, other.ID, ModeFull, "keep-a", "keep-b")
+	if err := st.AddLink(ctx, other.ID, otherTodos[0].LocalID, otherTodos[1].LocalID, "relates_to", ModeFull); err != nil {
+		t.Fatal(err)
+	}
 	data := exportIdentityProject(t, st, ctx, p.Slug)
 	if err := st.DeleteTodoByLocalID(ctx, p.ID, todos[1].LocalID, ModeFull); err != nil {
 		t.Fatal(err)
 	}
 	for i := range data.Projects[0].Todos {
 		data.Projects[0].Todos[i].Body = ""
-		if data.Projects[0].Todos[i].Title == "three" {
-			data.Projects[0].Todos[i].CustomFields = map[string]any{"points": "not a number"}
-		}
 	}
 	data.Projects[0].Links = []LinkExport{{FromLocalID: todos[1].LocalID, ToLocalID: todos[0].LocalID, LinkType: "parent"}}
 	data.Projects[0].Assets = nil
+	// Valid second project: preflight must pass. A trigger aborts the INSERT of its todo after
+	// the first project has already remapped and written links/custom fields inside the tx.
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	data.Projects = append(data.Projects, ProjectExport{
+		Slug: "identity-broken", Name: "Broken", CreatedAt: now, UpdatedAt: now,
+		Todos: []TodoExport{{LocalID: 1, Title: "broken", Status: "BACKLOG", Rank: 1000, Tags: []string{"ok"}, CreatedAt: now, UpdatedAt: now}},
+	})
+	if err := st.PreflightImport(ctx, data, ModeFull, "merge", false); err != nil {
+		t.Fatalf("preflight err = %v, want the failure to happen inside the import transaction", err)
+	}
+	if _, err := sqlDB.Exec(`CREATE TRIGGER trg_identity_fail_after_remap BEFORE INSERT ON todos WHEN NEW.title = 'broken' BEGIN SELECT RAISE(ABORT, 'injected failure after remap'); END`); err != nil {
+		t.Fatal(err)
+	}
 
+	beforeLocalOne := localIDByTitle(t, sqlDB, p.ID, "one")
+	beforeLocalThree := localIDByTitle(t, sqlDB, p.ID, "three")
+	beforeRefs := customFieldRefsByTitle(t, sqlDB, p.ID)
+	beforeLinks := linksByTitle(t, sqlDB, p.ID)
+	beforeOtherRefs := customFieldRefsByTitle(t, sqlDB, other.ID)
+	beforeOtherLinks := linksByTitle(t, sqlDB, other.ID)
 	before := importIdentitySnapshot(t, sqlDB)
-	_, err := st.ImportProjects(ctx, data, ModeFull, "merge")
-	if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "import custom fields") {
-		t.Fatalf("merge import err = %v, want custom field validation error", err)
+	_, err = st.ImportProjects(ctx, data, ModeFull, "merge")
+	if err == nil || !strings.Contains(err.Error(), "injected failure after remap") {
+		t.Fatalf("merge import err = %v, want injected failure after first-project remap writes", err)
 	}
 	if after := importIdentitySnapshot(t, sqlDB); after != before {
 		t.Fatalf("failed import changed data:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
+	if localIDByTitle(t, sqlDB, p.ID, "one") != beforeLocalOne || localIDByTitle(t, sqlDB, p.ID, "three") != beforeLocalThree {
+		t.Fatal("story local IDs changed after rolled-back import")
+	}
+	if n := countRows(t, sqlDB, `SELECT COUNT(*) FROM todos WHERE project_id = ?`, p.ID); n != 2 {
+		t.Fatalf("primary todo count = %d, want 2 (two still deleted)", n)
+	}
+	if n := countRows(t, sqlDB, `SELECT COUNT(*) FROM projects WHERE slug = 'identity-broken'`); n != 0 {
+		t.Fatal("broken project leaked after rollback")
+	}
+	afterRefs := customFieldRefsByTitle(t, sqlDB, p.ID)
+	for title, want := range beforeRefs {
+		if afterRefs[title] != want {
+			t.Fatalf("primary custom fields changed: before %v after %v", beforeRefs, afterRefs)
+		}
+	}
+	if len(afterRefs) != len(beforeRefs) {
+		t.Fatalf("primary custom fields changed: before %v after %v", beforeRefs, afterRefs)
+	}
+	assertStrings(t, "primary links", linksByTitle(t, sqlDB, p.ID), beforeLinks)
+	afterOtherRefs := customFieldRefsByTitle(t, sqlDB, other.ID)
+	for title, want := range beforeOtherRefs {
+		if afterOtherRefs[title] != want {
+			t.Fatalf("bystander custom fields changed: before %v after %v", beforeOtherRefs, afterOtherRefs)
+		}
+	}
+	if len(afterOtherRefs) != len(beforeOtherRefs) {
+		t.Fatalf("bystander custom fields changed: before %v after %v", beforeOtherRefs, afterOtherRefs)
+	}
+	assertStrings(t, "bystander links", linksByTitle(t, sqlDB, other.ID), beforeOtherLinks)
 }

@@ -409,28 +409,29 @@ WHERE v.todo_id IN (`+strings.Join(ph, ",")+`)`, args...)
 	return out, nil
 }
 
-// importCustomFieldsTx restores a backup's custom field definitions and todo
-// values into a project after its todos exist. Definitions are matched by key
-// (existing ones are kept; a type mismatch is a validation error), values are
-// validated against their definition, and a todo without values is untouched.
-// Values are written to the destination todos recorded in imported, never to a
-// todo looked up by its backup local ID.
-func importCustomFieldsTx(ctx context.Context, tx *sql.Tx, projectID int64, p ProjectExport, imported *importedTodos) error {
-	hasValues := false
+// projectExportUsesCustomFields reports whether a backup project carries any
+// custom field definitions or values.
+func projectExportUsesCustomFields(p ProjectExport) bool {
+	if len(p.CustomFields) > 0 {
+		return true
+	}
 	for _, t := range p.Todos {
 		if len(t.CustomFields) > 0 {
-			hasValues = true
-			break
+			return true
 		}
 	}
-	if len(p.CustomFields) == 0 && !hasValues {
-		return nil
-	}
-	existing, err := listCustomFieldsQ(ctx, tx, projectID)
-	if err != nil {
-		return err
-	}
-	byKey := make(map[string]CustomField, len(existing))
+	return false
+}
+
+// planImportCustomFields resolves a backup project's custom field definitions
+// against the destination's existing ones without writing anything. Definitions
+// are matched by key (existing ones are kept; a type mismatch is a validation
+// error). It returns every definition the project will have after the import,
+// keyed by key, and the new ones to insert in order (with ID 0). Import preflight
+// and preview use it with the definitions currently stored; the import itself
+// uses it inside its transaction.
+func planImportCustomFields(p ProjectExport, existing []CustomField) (map[string]CustomField, []CustomField, error) {
+	byKey := make(map[string]CustomField, len(existing)+len(p.CustomFields))
 	position := 0
 	for _, f := range existing {
 		byKey[f.Key] = f
@@ -438,25 +439,92 @@ func importCustomFieldsTx(ctx context.Context, tx *sql.Tx, projectID int64, p Pr
 			position = f.Position + 1
 		}
 	}
+	var toCreate []CustomField
 	for _, def := range p.CustomFields {
 		key := strings.ToLower(strings.TrimSpace(def.Key))
 		typ := CustomFieldType(def.Type)
 		name := strings.TrimSpace(def.Name)
 		if !isValidColumnKey(key) || !ValidCustomFieldType(typ) || name == "" || utf8.RuneCountInString(name) > maxCustomFieldNameLen {
-			return fmt.Errorf("%w: project %q has an invalid custom field definition %q", ErrValidation, p.Name, def.Key)
+			return nil, nil, fmt.Errorf("%w: project %q has an invalid custom field definition %q", ErrValidation, p.Name, def.Key)
 		}
 		if cur, ok := byKey[key]; ok {
 			if cur.Type != typ {
-				return fmt.Errorf("%w: custom field %q already exists with type %s, backup has %s", ErrValidation, key, cur.Type, typ)
+				return nil, nil, fmt.Errorf("%w: project %q: custom field %q already exists with type %s, backup has %s", ErrValidation, p.Name, key, cur.Type, typ)
 			}
 			continue
 		}
 		if len(byKey) >= maxCustomFieldsPerProject {
-			return fmt.Errorf("%w: project %q may have at most %d custom fields", ErrValidation, p.Name, maxCustomFieldsPerProject)
+			return nil, nil, fmt.Errorf("%w: project %q may have at most %d custom fields", ErrValidation, p.Name, maxCustomFieldsPerProject)
 		}
+		f := CustomField{Key: key, Name: name, Type: typ, Position: position}
+		byKey[key] = f
+		toCreate = append(toCreate, f)
+		position++
+	}
+	return byKey, toCreate, nil
+}
+
+// resolveImportTodoCustomFields validates one backup todo's values against the
+// project's post-import definitions. Null values are skipped.
+func resolveImportTodoCustomFields(p ProjectExport, t TodoExport, byKey map[string]CustomField) (map[string]resolvedCustomField, error) {
+	patch := make(map[string]resolvedCustomField, len(t.CustomFields))
+	for key, raw := range t.CustomFields {
+		def, ok := byKey[strings.ToLower(strings.TrimSpace(key))]
+		if !ok {
+			return nil, fmt.Errorf("%w: project %q: todo %d has a value for undefined custom field %q", ErrValidation, p.Name, t.LocalID, key)
+		}
+		if raw == nil {
+			continue
+		}
+		val, err := normalizeCustomFieldValue(def, raw)
+		if err != nil {
+			return nil, fmt.Errorf("project %q: todo %d: %w", p.Name, t.LocalID, err)
+		}
+		patch[def.Key] = resolvedCustomField{fieldID: def.ID, value: val}
+	}
+	return patch, nil
+}
+
+// validateImportCustomFields checks a backup project's custom field definitions
+// and values against the destination's existing definitions (nil for a project
+// the import creates) without writing.
+func validateImportCustomFields(p ProjectExport, existing []CustomField) error {
+	if !projectExportUsesCustomFields(p) {
+		return nil
+	}
+	byKey, _, err := planImportCustomFields(p, existing)
+	if err != nil {
+		return err
+	}
+	for _, t := range p.Todos {
+		if _, err := resolveImportTodoCustomFields(p, t, byKey); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// importCustomFieldsTx restores a backup's custom field definitions and todo
+// values into a project after its todos exist. Definitions and values follow
+// planImportCustomFields and resolveImportTodoCustomFields, and a todo without
+// values is untouched. Values are written to the destination todos recorded in
+// imported, never to a todo looked up by its backup local ID.
+func importCustomFieldsTx(ctx context.Context, tx *sql.Tx, projectID int64, p ProjectExport, imported *importedTodos) error {
+	if !projectExportUsesCustomFields(p) {
+		return nil
+	}
+	existing, err := listCustomFieldsQ(ctx, tx, projectID)
+	if err != nil {
+		return err
+	}
+	byKey, toCreate, err := planImportCustomFields(p, existing)
+	if err != nil {
+		return err
+	}
+	for _, f := range toCreate {
 		res, err := tx.ExecContext(ctx, `
 INSERT INTO project_custom_fields(project_id, key, name, type, position)
-VALUES (?, ?, ?, ?, ?)`, projectID, key, name, string(typ), position)
+VALUES (?, ?, ?, ?, ?)`, projectID, f.Key, f.Name, string(f.Type), f.Position)
 		if err != nil {
 			return fmt.Errorf("insert custom field: %w", err)
 		}
@@ -464,8 +532,8 @@ VALUES (?, ?, ?, ?, ?)`, projectID, key, name, string(typ), position)
 		if err != nil {
 			return fmt.Errorf("custom field id: %w", err)
 		}
-		byKey[key] = CustomField{ID: id, ProjectID: projectID, Key: key, Name: name, Type: typ, Position: position}
-		position++
+		f.ID, f.ProjectID = id, projectID
+		byKey[f.Key] = f
 	}
 	for i, t := range p.Todos {
 		if len(t.CustomFields) == 0 {
@@ -479,20 +547,9 @@ VALUES (?, ?, ?, ?, ?)`, projectID, key, name, string(typ), position)
 		if err != nil {
 			return err
 		}
-		patch := make(map[string]resolvedCustomField, len(t.CustomFields))
-		for key, raw := range t.CustomFields {
-			def, ok := byKey[strings.ToLower(strings.TrimSpace(key))]
-			if !ok {
-				return fmt.Errorf("%w: todo %d has a value for undefined custom field %q", ErrValidation, t.LocalID, key)
-			}
-			if raw == nil {
-				continue
-			}
-			val, err := normalizeCustomFieldValue(def, raw)
-			if err != nil {
-				return err
-			}
-			patch[def.Key] = resolvedCustomField{fieldID: def.ID, value: val}
+		patch, err := resolveImportTodoCustomFields(p, t, byKey)
+		if err != nil {
+			return err
 		}
 		if _, _, err := applyCustomFieldPatchTx(ctx, tx, todoID, current, patch); err != nil {
 			return err

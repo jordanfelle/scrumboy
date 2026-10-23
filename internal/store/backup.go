@@ -1497,6 +1497,44 @@ func (s *Store) validateImportPreflight(ctx context.Context, data *ExportData, m
 		}
 	}
 
+	// Runs after the role checks so a rejected caller learns nothing about stored definitions.
+	return s.validateImportCustomFieldsPreflight(ctx, data, mode, importMode)
+}
+
+// validateImportCustomFieldsPreflight applies the import's custom field rules without writing.
+// Only Merge into an existing project combines the backup with stored definitions; Replace,
+// Create Copy and anonymous Merge (which creates copies) always import into a new project.
+func (s *Store) validateImportCustomFieldsPreflight(ctx context.Context, data *ExportData, mode Mode, importMode string) error {
+	matchExisting := importMode == "merge" && mode != ModeAnonymous
+	var whereClause string
+	var args []any
+	if matchExisting {
+		var err error
+		if whereClause, args, err = s.getExportableProjectsSelector(ctx, mode); err != nil {
+			return fmt.Errorf("custom field check: %w", err)
+		}
+	}
+	for _, p := range data.Projects {
+		if !projectExportUsesCustomFields(p) {
+			continue
+		}
+		var existing []CustomField
+		if matchExisting && p.Slug != "" {
+			var projectID int64
+			err := s.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT id FROM projects WHERE slug = ? AND (%s)`, whereClause), append([]any{p.Slug}, args...)...).Scan(&projectID)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("custom field check project %q: %w", p.Slug, err)
+			}
+			if err == nil {
+				if existing, err = listCustomFieldsQ(ctx, s.db, projectID); err != nil {
+					return err
+				}
+			}
+		}
+		if err := validateImportCustomFields(p, existing); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -3171,6 +3209,11 @@ func (s *Store) previewImport(ctx context.Context, data *ExportData, mode Mode, 
 			result.WillCreate += len(p.Todos)
 		}
 		log.Printf("PreviewImport: Copy mode - will create %d items", result.WillCreate)
+	}
+
+	// Custom field rules the import enforces; after the merge role checks above.
+	if err := s.validateImportCustomFieldsPreflight(ctx, data, mode, importMode); err != nil {
+		return nil, err
 	}
 
 	log.Printf("PreviewImport: Returning preview - Projects:%d Todos:%d Tags:%d WillCreate:%d WillUpdate:%d WillDelete:%d",
