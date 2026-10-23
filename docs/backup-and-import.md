@@ -11,11 +11,12 @@ JSON export/import covers Scrumboy **project** data in a portable backup file. I
 JSON export does **not** include:
 
 - Uploaded wallpaper files under `DATA_DIR/user-wallpapers/`
+- Images in story notes under `DATA_DIR/assets/` - project exports with images use the `.sbz` archive format below instead of JSON, so they *do* carry the images of exported stories
 - `audit_events`
 - General user preferences as a full restore unit
 - Other file-backed instance state outside the scoped project export
 
-For whole-instance backup and restore (SQLite, WAL/SHM, wallpapers, encryption key when used), see [diagrams/scrumboy_deployment_ops.md](diagrams/scrumboy_deployment_ops.md).
+For whole-instance backup and restore (SQLite, WAL/SHM, wallpapers, note images, encryption key when used), see [recovery.md](recovery.md#instance-backup-and-restore) and [diagrams/scrumboy_deployment_ops.md](diagrams/scrumboy_deployment_ops.md).
 
 ## Export scope
 
@@ -128,3 +129,32 @@ preserve, so an absent `archivedAt` simply creates an **active** story. A 1.1 pa
 therefore always imports as active, exactly as it did before archival existed.
 
 Import commits only when every non-null todo priority key resolves to a tier in the same project.
+
+## Backups with images (`.sbz`)
+
+When [inline images](inline-images.md) are used, an export whose stories embed images downloads as a **`.sbz`** archive instead of JSON. Exports without images stay JSON format 1.2, readable by older Scrumboy versions.
+
+A `.sbz` file is a ZIP containing:
+
+- `manifest.json` - the same backup data as a JSON export, format **1.3**, with each project listing its images (`assets`: id, type, size, dimensions, SHA-256)
+- `assets/<id>.png|jpg|gif` - the image bytes
+
+Only images embedded by an exported story (active or archived) are included; unsaved drafts are not. The image list is taken from the exported note text itself, so every image the backup's notes embed is in the archive, even while others edit stories or right after a downgrade. Every image file is checked before the download starts, so a backup with a missing image fails with an error instead of downloading an incomplete archive. In the rare case that a story is edited and its image removed during the export, the export fails and can simply be repeated. A note that embeds an image URL that never belonged to its project (typed by hand, or copied from another board) shows "Image unavailable" and is exported as text only.
+
+Importing a `.sbz` (Settings → Backup accepts `.json` and `.sbz`):
+
+- Requires inline images to be enabled on the importing server.
+- Works in **Replace**, **Merge** and **Create copy** with the same rules and confirmation as JSON imports. The preview also shows the number of images.
+- The archive is uploaded twice: once for the preview and once for the import.
+- Imported images always get **new ids**. Note text is rewritten only where an image is embedded. Prose, code and ordinary links that mention an image URL are left unchanged, so such links keep the old id and will not resolve after **Create copy** or **Replace**.
+- **Merge** reuses an existing image of the target project when the bytes are identical, so merging a project's own backup does not duplicate images.
+- Image bytes are re-validated and must match the manifest checksums. A failed import leaves existing projects and images unchanged.
+- Every image a story embeds must be restored. If any cannot be, the preview and the import fail before anything is written, including in **Replace**. This happens for some hand-edited archives, for a note over 1 MiB that embeds an image, and for a reference-style image whose definition is also used by an ordinary link (for example `![Shot][a]` and `[Open][a]` sharing `[a]: /api/assets/…`), because rewriting it would retarget the link. Give the link its own definition and export again.
+- One archive per user is processed at a time, two across the server, and each user may send 10 archive previews or imports per 10 minutes. Busy requests are refused before the upload is stored; retry shortly.
+- Storage budgets apply. A **Replace** needs free budget for the imported images, because the old projects' images are released only when the replacement completes.
+- Limits: 512 MB upload, 1 GB total uncompressed, 5,000 entries, 10 MB per image. There is no compression-ratio rule.
+- A JSON file labeled 1.3, or a 1.1/1.2 JSON file listing images, is rejected: import the `.sbz` instead.
+
+A Replace import that was interrupted by a crash leaves invisible staging data; Scrumboy removes it, and its image files, after the next restart.
+
+In the Android app, `.sbz` backups cannot be exported or imported. The app shows a message instead, and JSON backups over 8 MB are refused there too. Use a web browser for these backups.

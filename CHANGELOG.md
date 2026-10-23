@@ -1,6 +1,77 @@
 # Changelog
 
-> **Upgrades:** No breaking changes for **3.7.0 ≤ v ≤ 3.38.x** unless noted below. Notable upgrade impact: **3.22.0** (MCP/OAuth), **3.24.0** (MCP tool names), **3.26.0** (MCP project tags), **3.29.0** (MCP JSON-RPC error/`board_get` identity), **3.30.0** (reversible per-project sprint capability), **3.31.0** (per-project priority tiers), **3.33.0** (Agenda ICS feeds need `SCRUMBOY_ENCRYPTION_KEY`), **3.33.12** (webhook destinations must be publicly routable), **3.35.0** (backup format 1.2; Trello closed-card titles) - see those releases.
+> **Upgrades:** No breaking changes for **3.7.0 ≤ v ≤ 3.39.x** unless noted below. Notable upgrade impact: **3.22.0** (MCP/OAuth), **3.24.0** (MCP tool names), **3.26.0** (MCP project tags), **3.29.0** (MCP JSON-RPC error/`board_get` identity), **3.30.0** (reversible per-project sprint capability), **3.31.0** (per-project priority tiers), **3.33.0** (Agenda ICS feeds need `SCRUMBOY_ENCRYPTION_KEY`), **3.33.12** (webhook destinations must be publicly routable), **3.35.0** (backup format 1.2; Trello closed-card titles) - see those releases.
+
+## [3.39.0] - 2026-10-22
+
+### Added
+
+- **Images in story notes** - In Full Mode with Markdown notes on (both the
+  default, see **Changed**), editors can paste or drop PNG, JPEG and GIF
+  images (up to 10 MB) into the notes. Images are stored under
+  `DATA_DIR/assets/` as `![alt](/api/assets/{uuid})`, without re-encoding and
+  with EXIF/GPS metadata removed.
+  - Images appear in place in the notes editor (CodeMirror 6, about 85 KB
+    gzipped). Select one to resize it proportionally with its bottom-right
+    handle or **+**/**-**, or remove it with Delete; undo and redo work as
+    usual.
+  - A resized image stores its width in the alt text
+    (`![screenshot|480](...)`); the rest of the note is left untouched.
+  - Uploads follow the story's edit permissions. Public visitors see only
+    images embedded in a non-archived story of a published board. Unused
+    images are removed after about 7 days, and per-project and per-instance
+    storage budgets apply. See `docs/inline-images.md`.
+- **`.sbz` backups with images** - Project exports whose stories embed images
+  download as a `.sbz` archive (backup JSON format 1.3 plus image files);
+  image-free exports stay JSON 1.2. Archive import supports Replace, Merge and
+  Create copy, mints new image ids and rewrites only image destinations in
+  notes (including entity-encoded or escaped ones); an archive whose embedded
+  images cannot all be restored, or whose image shares a reference definition
+  with an ordinary link, is rejected before anything changes. The
+  exported image list is derived from the exported notes, and archive uploads
+  are admitted (one per user, two per server, rate-limited) before any bytes
+  are stored. The Android app refuses image backups and JSON backups over 8 MB with
+  a message instead of attempting the transfer.
+
+### Changed
+
+- **Markdown preview, Mermaid diagrams and inline images are now on by default
+  in Full Mode** - Fresh Full Mode installations get all three without any
+  configuration. Existing installations that upgrade with
+  `SCRUMBOY_MARKDOWN_NOTES_ENABLED`, `SCRUMBOY_MERMAID_NOTES_ENABLED` and
+  `SCRUMBOY_INLINE_IMAGES_ENABLED` unset gain them too. Installations with an
+  explicit `=0` (or `false`/`off`/`no`) keep that feature off.
+  - Each feature can be turned off independently with its variable. Mermaid
+    and inline images depend on Markdown, so `SCRUMBOY_MARKDOWN_NOTES_ENABLED=0`
+    turns off all three. An unrecognized value turns that feature off and logs
+    a startup warning.
+  - Existing story notes are not migrated or rewritten by this change.
+  - Image files are stored under `DATA_DIR/assets/` and must be included in
+    instance-level backups. Exports of projects whose stories embed images are
+    `.sbz` archives instead of JSON.
+  - Other restrictions are unchanged: images are never available on temporary
+    boards or in Anonymous Mode, and the Android app still cannot export or
+    import image backups. In Anonymous Mode, Markdown preview and Mermaid now
+    also default on.
+  - `scrumboy.env.example` leaves the three variables commented out, and the
+    stock `docker-compose.yml` forwards them so they can be set to `0`.
+- **Crashed Replace imports are cleaned up on restart** - Invisible staging
+  projects left by an interrupted Replace import (and their image files) are
+  removed after the next restart, whether or not inline images are enabled.
+
+### Upgrade notes
+
+- Markdown preview, Mermaid and inline images turn on at upgrade unless the
+  instance sets them to `0` (see **Changed**). Before upgrading, check that
+  backups cover `DATA_DIR/assets/` and that the reverse-proxy limits below are
+  in place, or set `SCRUMBOY_INLINE_IMAGES_ENABLED=0`.
+- Migration `078` adds the `project_assets` and `todo_assets` tables (additive;
+  applied automatically). Older binaries can run against the upgraded database,
+  but image references edited while downgraded are re-checked on the next start.
+- Instance backups must include `DATA_DIR/assets/` from the same backup as the
+  database; see `docs/recovery.md` for consistent offline and online procedures.
+- Reverse proxies need to allow about 11 MB request bodies for image uploads,
+  and about 520 MB for `.sbz` imports.
 
 ## [3.38.10] - 2026-10-19
 
