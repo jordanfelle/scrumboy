@@ -66,14 +66,22 @@ type Config struct {
 	// Durable projects only; anonymous/temp boards never expose the wall.
 	WallEnabled bool
 
-	// Markdown notes preview. Defaults off until explicitly enabled via
-	// SCRUMBOY_MARKDOWN_NOTES_ENABLED=1 (also accepts true/on/yes).
+	// Markdown notes preview. Defaults on; opt out with
+	// SCRUMBOY_MARKDOWN_NOTES_ENABLED=0 (see defaultOnFeatureFromEnv).
 	MarkdownNotesEnabled bool
 
-	// Mermaid notes preview. Defaults off until explicitly enabled via
-	// SCRUMBOY_MERMAID_NOTES_ENABLED=1 (also accepts true/on/yes). Effective
-	// only when MarkdownNotesEnabled is also true.
+	// Mermaid notes preview. Defaults on; opt out with
+	// SCRUMBOY_MERMAID_NOTES_ENABLED=0. Already false when MarkdownNotesEnabled is false.
 	MermaidNotesEnabled bool
+
+	// Inline images in story notes. Defaults on; opt out with
+	// SCRUMBOY_INLINE_IMAGES_ENABLED=0. This is the operator setting; the effective
+	// value is InlineImagesActive (Full mode with markdown notes enabled).
+	InlineImagesEnabled bool
+	// Byte budgets for stored note images (0 disables that budget).
+	// SCRUMBOY_ASSET_PROJECT_BUDGET_MB / SCRUMBOY_ASSET_INSTANCE_BUDGET_MB.
+	AssetProjectBudgetBytes  int64
+	AssetInstanceBudgetBytes int64
 
 	// SMTP (optional). Enables self-service "forgot password" emails. Host and
 	// From are required; Port defaults to 587 when omitted. Invalid explicit
@@ -103,6 +111,10 @@ type Config struct {
 	// Without PublicBaseURL, OAuth discovery also requires forwarded HTTPS and
 	// an explicit X-Forwarded-Host; it never falls back to the request Host.
 	TrustProxy bool
+
+	// Warnings lists configuration values FromEnv did not recognize and how it
+	// treated them, for the caller to log at startup.
+	Warnings []string
 }
 
 func FromEnv() Config {
@@ -116,7 +128,10 @@ func FromEnv() Config {
 		mode = "full" // Default to full if invalid
 	}
 
-	markdownNotesEnabled := markdownNotesEnabledFromEnv()
+	var warnings []string
+	markdownNotesEnabled := defaultOnFeatureFromEnv("SCRUMBOY_MARKDOWN_NOTES_ENABLED", &warnings)
+	mermaidNotesEnabled := defaultOnFeatureFromEnv("SCRUMBOY_MERMAID_NOTES_ENABLED", &warnings) && markdownNotesEnabled
+	inlineImagesEnabled := defaultOnFeatureFromEnv("SCRUMBOY_INLINE_IMAGES_ENABLED", &warnings)
 	smtpPort, smtpPortExplicit := smtpPortFromEnv()
 
 	return Config{
@@ -155,7 +170,11 @@ func FromEnv() Config {
 
 		WallEnabled:          wallEnabledFromEnv(),
 		MarkdownNotesEnabled: markdownNotesEnabled,
-		MermaidNotesEnabled:  mermaidNotesEnabledFromEnv(markdownNotesEnabled),
+		MermaidNotesEnabled:  mermaidNotesEnabled,
+
+		InlineImagesEnabled:      inlineImagesEnabled,
+		AssetProjectBudgetBytes:  assetBudgetBytesFromEnv("SCRUMBOY_ASSET_PROJECT_BUDGET_MB", 1024),
+		AssetInstanceBudgetBytes: assetBudgetBytesFromEnv("SCRUMBOY_ASSET_INSTANCE_BUDGET_MB", 10240),
 
 		SMTPHost:         strings.TrimSpace(os.Getenv("SCRUMBOY_SMTP_HOST")),
 		SMTPPort:         smtpPort,
@@ -168,6 +187,8 @@ func FromEnv() Config {
 
 		PublicBaseURL: NormalizeBaseURL(os.Getenv("SCRUMBOY_PUBLIC_BASE_URL")),
 		TrustProxy:    trustProxyFromEnv(),
+
+		Warnings: warnings,
 	}
 }
 
@@ -247,11 +268,22 @@ func wallEnabledFromEnv() bool {
 	}
 }
 
-// markdownNotesEnabledFromEnv returns whether the Phase 1 markdown notes
-// preview is enabled. Default is false unless explicitly opted in with
-// 1/true/on/yes (trimmed, case-insensitive).
-func markdownNotesEnabledFromEnv() bool {
-	return optInFeatureEnabledFromEnv("SCRUMBOY_MARKDOWN_NOTES_ENABLED")
+// defaultOnFeatureFromEnv parses enabled-by-default feature flags (Markdown
+// notes, Mermaid, inline images). Unset or empty enables; 0/false/off/no
+// disables; 1/true/on/yes enables (trimmed, case-insensitive). Any other
+// nonempty value disables the feature rather than guessing, and is reported in
+// warnings so the operator sees it at startup.
+func defaultOnFeatureFromEnv(key string, warnings *[]string) bool {
+	raw := os.Getenv(key)
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case "", "1", "true", "on", "yes":
+		return true
+	case "0", "false", "off", "no":
+		return false
+	default:
+		*warnings = append(*warnings, fmt.Sprintf("%s=%q is not recognized (use 1 or 0); feature disabled", key, raw))
+		return false
+	}
 }
 
 // optInFeatureEnabledFromEnv parses disabled-by-default feature flags. Only
@@ -274,20 +306,11 @@ func trustProxyFromEnv() bool {
 	return optInFeatureEnabledFromEnv("SCRUMBOY_TRUST_PROXY")
 }
 
-// mermaidNotesEnabledFromEnv returns whether Mermaid preview is enabled for todo
-// notes. Mermaid is layered on top of markdown preview, so it is only effective
-// when markdown notes are already enabled.
-func mermaidNotesEnabledFromEnv(markdownNotesEnabled bool) bool {
-	if !markdownNotesEnabled {
-		return false
-	}
-	v := strings.TrimSpace(strings.ToLower(os.Getenv("SCRUMBOY_MERMAID_NOTES_ENABLED")))
-	switch v {
-	case "1", "true", "on", "yes":
-		return true
-	default:
-		return false
-	}
+// InlineImagesActive reports whether inline images are effective: enabled,
+// with markdown notes enabled, in Full mode. The HTTP server additionally
+// requires a data directory and asset storage.
+func (c Config) InlineImagesActive() bool {
+	return c.InlineImagesEnabled && c.MarkdownNotesEnabled && c.ScrumboyMode == "full"
 }
 
 // OIDCEnabled returns true if all required OIDC env vars are set.
@@ -380,6 +403,16 @@ func smtpPortFromEnv() (port int, explicit bool) {
 		return 0, true
 	}
 	return n, true
+}
+
+// assetBudgetBytesFromEnv reads a budget in MiB. 0 disables the budget; negative or invalid
+// values fall back to the default.
+func assetBudgetBytesFromEnv(key string, defaultMB int) int64 {
+	mb := getenvInt(key, defaultMB)
+	if mb < 0 {
+		mb = defaultMB
+	}
+	return int64(mb) << 20
 }
 
 func getenvInt(key string, defaultValue int) int {

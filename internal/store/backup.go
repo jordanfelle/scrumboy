@@ -90,6 +90,9 @@ type ProjectExport struct {
 	// CustomFields are the project's typed custom field definitions. Omitted when
 	// the project defines none, so such backups stay byte-compatible.
 	CustomFields []CustomFieldExport `json:"customFields,omitempty"`
+	// Assets lists the note images referenced by this project's stories. It is only present in
+	// .sbz archives (format 1.3), whose assets/ entries carry the bytes; JSON exports never set it.
+	Assets []AssetExport `json:"assets,omitempty"`
 }
 
 // CustomFieldExport is a project custom field definition in backup format.
@@ -98,6 +101,18 @@ type CustomFieldExport struct {
 	Name     string `json:"name"`
 	Type     string `json:"type"`
 	Position int    `json:"position"`
+}
+
+// AssetExport describes one image in a .sbz archive. ID is the exporting instance's asset UUID;
+// importers treat it as an archive-local identifier and never as a server identity.
+type AssetExport struct {
+	ID        string `json:"id"`
+	MimeType  string `json:"mimeType"`
+	SizeBytes int64  `json:"sizeBytes"`
+	Width     int    `json:"width"`
+	Height    int    `json:"height"`
+	SHA256    string `json:"sha256"`
+	Name      string `json:"name,omitempty"`
 }
 
 // TodoExport represents a todo in export format
@@ -150,15 +165,42 @@ func importDueAtForInsert(t TodoExport) any {
 const importArchivedAtFutureSlackMs int64 = 24 * 60 * 60 * 1000
 
 func validateBackupVersionAndArchiveFields(data *ExportData) error {
+	return validateBackupData(data, false)
+}
+
+// validateBackupData validates the version and field rules. Format 1.3 (projects carrying
+// assets) is accepted only from a .sbz archive, because only archives carry the image bytes.
+func validateBackupData(data *ExportData, fromArchive bool) error {
 	if data == nil {
 		return fmt.Errorf("%w: missing export data", ErrValidation)
 	}
-	if !supportedExportVersion(data.Version) {
-		return fmt.Errorf("%w: unsupported export version %q (expected %s)", ErrValidation, data.Version, version.ExportFormatVersion)
+	if fromArchive {
+		if data.Version != version.ArchiveExportFormatVersion {
+			return fmt.Errorf("%w: unsupported archive export version %q (expected %s)", ErrValidation, data.Version, version.ArchiveExportFormatVersion)
+		}
+	} else {
+		if data.Version == version.ArchiveExportFormatVersion {
+			return fmt.Errorf("%w: backups with images (format %s) must be imported as a .sbz archive", ErrValidation, data.Version)
+		}
+		if !supportedExportVersion(data.Version) {
+			return fmt.Errorf("%w: unsupported export version %q (expected %s)", ErrValidation, data.Version, version.ExportFormatVersion)
+		}
+		for _, project := range data.Projects {
+			if len(project.Assets) > 0 {
+				return fmt.Errorf("%w: format %s project %q contains image assets; import the .sbz archive instead", ErrValidation, data.Version, project.Name)
+			}
+		}
 	}
 	ceiling := time.Now().UTC().UnixMilli() + importArchivedAtFutureSlackMs
 	for _, project := range data.Projects {
+		localIDs := make(map[int64]struct{}, len(project.Todos))
 		for _, todo := range project.Todos {
+			if todo.LocalID != 0 {
+				if _, dup := localIDs[todo.LocalID]; dup {
+					return fmt.Errorf("%w: project %q has duplicate todo localId %d", ErrValidation, project.Name, todo.LocalID)
+				}
+				localIDs[todo.LocalID] = struct{}{}
+			}
 			if data.Version == "1.1" && todo.ArchivedAtPresent {
 				return fmt.Errorf("%w: format 1.1 todo %d contains 1.2 archivedAt data", ErrValidation, todo.LocalID)
 			}
@@ -372,6 +414,9 @@ type PreviewResult struct {
 	WillUpdate int      `json:"willUpdate,omitempty"`
 	WillCreate int      `json:"willCreate,omitempty"`
 	Warnings   []string `json:"warnings,omitempty"`
+	// Assets and AssetBytes count images in an archive preview (0 for JSON).
+	Assets     int   `json:"assets,omitempty"`
+	AssetBytes int64 `json:"assetBytes,omitempty"`
 }
 
 // getExportableProjectsSelector returns the SQL WHERE clause and args for projects that should be exported.
@@ -561,7 +606,6 @@ func (s *Store) ExportAllProjects(ctx context.Context, mode Mode) (*ExportData, 
 		if err != nil {
 			return nil, fmt.Errorf("export tags for project %d: %w", p.ID, err)
 		}
-
 		// Convert to export format
 		todoExports := make([]TodoExport, 0, len(todos))
 		for _, t := range todos {
@@ -607,6 +651,13 @@ func (s *Store) ExportAllProjects(ctx context.Context, mode Mode) (*ExportData, 
 				ArchivedAtPresent:  true,
 				DueAt:              dueAtMs,
 			})
+		}
+
+		// The image list is derived from the exported bodies themselves, so it always matches
+		// them (concurrent edits, or references an older binary wrote without link rows).
+		assetExports, err := s.exportAssetsForProject(ctx, p.ID, todoExports)
+		if err != nil {
+			return nil, err
 		}
 
 		// Import uses normal CanonicalizeTag validation and todo create/update do too.
@@ -731,6 +782,7 @@ func (s *Store) ExportAllProjects(ctx context.Context, mode Mode) (*ExportData, 
 			Links:                linkExports,
 			Wall:                 wallExport,
 			CustomFields:         customFieldExports,
+			Assets:               assetExports,
 		})
 	}
 
@@ -1450,8 +1502,14 @@ func (s *Store) validateImportPreflight(ctx context.Context, data *ExportData, m
 
 // ImportProjectsWithTarget imports with an optional target slug for merging into existing board
 func (s *Store) ImportProjectsWithTarget(ctx context.Context, data *ExportData, mode Mode, importMode string, targetSlug string) (*ImportResult, error) {
+	return s.importProjects(ctx, data, mode, importMode, targetSlug, nil)
+}
+
+// importProjects is the shared import entry. plan is nil for JSON imports (today's code paths)
+// and non-nil for .sbz archive imports, whose images are already written to disk.
+func (s *Store) importProjects(ctx context.Context, data *ExportData, mode Mode, importMode string, targetSlug string, plan *ImportAssetPlan) (*ImportResult, error) {
 	// Validate JSON structure and version
-	if err := validateBackupVersionAndArchiveFields(data); err != nil {
+	if err := validateBackupData(data, plan != nil); err != nil {
 		return nil, err
 	}
 
@@ -1466,7 +1524,7 @@ func (s *Store) ImportProjectsWithTarget(ctx context.Context, data *ExportData, 
 	}
 
 	// If targetSlug is provided in anonymous mode, import into that board
-	if targetSlug != "" && mode == ModeAnonymous {
+	if targetSlug != "" && mode == ModeAnonymous && plan == nil {
 		log.Printf("ImportProjectsWithTarget: Importing into target board %s", targetSlug)
 		return s.importIntoBoard(ctx, data, mode, targetSlug)
 	}
@@ -1477,16 +1535,21 @@ func (s *Store) ImportProjectsWithTarget(ctx context.Context, data *ExportData, 
 	}
 
 	// Route to appropriate import handler
+	var (
+		result *ImportResult
+		err    error
+	)
 	switch importMode {
 	case "replace":
-		return s.importReplaceAll(ctx, data, mode)
+		result, err = s.importReplaceAll(ctx, data, mode, plan)
 	case "merge":
-		return s.importMergeUpdate(ctx, data, mode)
+		result, err = s.importMergeUpdate(ctx, data, mode, plan)
 	case "copy":
-		return s.importCreateCopy(ctx, data, mode)
+		result, err = s.importCreateCopy(ctx, data, mode, plan)
 	default:
 		return nil, fmt.Errorf("%w: invalid import mode %q", ErrValidation, importMode)
 	}
+	return result, err
 }
 
 // importIntoBoard imports todos and tags into an existing board (anonymous mode only).
@@ -1523,7 +1586,8 @@ func (s *Store) importIntoBoard(ctx context.Context, data *ExportData, mode Mode
 
 	// Import all todos from all projects in the export into the target board
 	for _, pExport := range data.Projects {
-		for _, tExport := range pExport.Todos {
+		imported := newImportedTodos(len(pExport.Todos))
+		for i, tExport := range pExport.Todos {
 			// Create todo with new local_id (find max and increment)
 			var maxLocalID sql.NullInt64
 			if err := tx.QueryRowContext(ctx, `SELECT MAX(local_id) FROM todos WHERE project_id = ?`, targetProject.ID).Scan(&maxLocalID); err != nil {
@@ -1586,6 +1650,10 @@ func (s *Store) importIntoBoard(ctx context.Context, data *ExportData, mode Mode
 			if err != nil {
 				return nil, fmt.Errorf("get todo id: %w", err)
 			}
+			imported.record(i, tExport.LocalID, newLocalID, todoID, true)
+			if err := syncTodoAssetsTx(ctx, tx, targetProject.ID, todoID, tExport.Body, time.Now().UTC().UnixMilli()); err != nil {
+				return nil, err
+			}
 
 			// Import tags for this todo
 			if err := s.importTodoTags(ctx, tx, targetProject.ID, todoID, tExport.Tags, mode); err != nil {
@@ -1602,10 +1670,10 @@ func (s *Store) importIntoBoard(ctx context.Context, data *ExportData, mode Mode
 			}
 		}
 
-		if err := bulkInsertLinks(ctx, tx, targetProject.ID, pExport.Links); err != nil {
+		if err := bulkInsertLinks(ctx, tx, targetProject.ID, pExport.Links, imported, false); err != nil {
 			return nil, fmt.Errorf("import links: %w", err)
 		}
-		if err := importCustomFieldsTx(ctx, tx, targetProject.ID, pExport); err != nil {
+		if err := importCustomFieldsTx(ctx, tx, targetProject.ID, pExport, imported); err != nil {
 			return nil, fmt.Errorf("import custom fields: %w", err)
 		}
 	}
@@ -1625,7 +1693,7 @@ func (s *Store) importIntoBoard(ctx context.Context, data *ExportData, mode Mode
 }
 
 // importReplaceAll implements Replace All mode (nuke & restore) using staging approach
-func (s *Store) importReplaceAll(ctx context.Context, data *ExportData, mode Mode) (*ImportResult, error) {
+func (s *Store) importReplaceAll(ctx context.Context, data *ExportData, mode Mode, plan *ImportAssetPlan) (*ImportResult, error) {
 	result := &ImportResult{Warnings: []string{}}
 
 	// Early validation: check for duplicate slugs (skip empty slugs - they'll be generated)
@@ -1660,7 +1728,7 @@ func (s *Store) importReplaceAll(ctx context.Context, data *ExportData, mode Mod
 
 	// Defer cleanup: single point of failure handling
 	defer func() {
-		if cleanupNeeded {
+		if cleanupNeeded && !replaceSkipStagingCleanupHook {
 			// Best-effort cleanup: log but don't fail
 			if _, err := conn.ExecContext(ctx, "DELETE FROM projects WHERE import_batch_id = ?", batchID); err != nil {
 				log.Printf("warning: failed to cleanup staging projects: %v", err)
@@ -1679,7 +1747,7 @@ func (s *Store) importReplaceAll(ctx context.Context, data *ExportData, mode Mod
 	}()
 
 	// Phase A: Import into staging (per-project transactions)
-	for _, pExport := range data.Projects {
+	for pi, pExport := range data.Projects {
 		// Validate: Name is required, slug is optional (will be generated if missing)
 		if pExport.Name == "" {
 			return nil, fmt.Errorf("%w: project missing name", ErrValidation)
@@ -1730,8 +1798,15 @@ func (s *Store) importReplaceAll(ctx context.Context, data *ExportData, mode Mod
 			return nil, fmt.Errorf("import sprints for project %q: %w", pExport.Name, err)
 		}
 
+		// Archive images: rows for the staging project, then remapped note bodies.
+		todos, err := s.applyImportAssetsTx(ctx, tx, plan, pi, projectID, pExport, time.Now().UTC().UnixMilli())
+		if err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+
 		// Bulk insert todos (strict mode for Replace)
-		todoIDMap, err := bulkInsertTodos(ctx, tx, projectID, pExport.Todos, true, &result.Warnings, sprintIDByNumber)
+		imported, err := bulkInsertTodos(ctx, tx, projectID, todos, true, &result.Warnings, sprintIDByNumber)
 		if err != nil {
 			tx.Rollback()
 			return nil, fmt.Errorf("import todos for project %q: %w", pExport.Name, err)
@@ -1745,17 +1820,17 @@ func (s *Store) importReplaceAll(ctx context.Context, data *ExportData, mode Mod
 		}
 
 		// Bulk link todos to tags
-		todoTagMap := buildTodoTagMap(pExport.Todos, todoIDMap)
+		todoTagMap := buildTodoTagMap(pExport.Todos, imported)
 		if err := bulkLinkTodoTags(ctx, tx, todoTagMap, tagIDMap); err != nil {
 			tx.Rollback()
 			return nil, fmt.Errorf("link tags for project %q: %w", pExport.Name, err)
 		}
 
-		if err := bulkInsertLinks(ctx, tx, projectID, pExport.Links); err != nil {
+		if err := bulkInsertLinks(ctx, tx, projectID, pExport.Links, imported, false); err != nil {
 			tx.Rollback()
 			return nil, fmt.Errorf("import links for project %q: %w", pExport.Name, err)
 		}
-		if err := importCustomFieldsTx(ctx, tx, projectID, pExport); err != nil {
+		if err := importCustomFieldsTx(ctx, tx, projectID, pExport, imported); err != nil {
 			tx.Rollback()
 			return nil, fmt.Errorf("import custom fields for project %q: %w", pExport.Name, err)
 		}
@@ -1763,7 +1838,7 @@ func (s *Store) importReplaceAll(ctx context.Context, data *ExportData, mode Mod
 		// Replace mode: a missing wall field in the backup produces no wall row,
 		// which matches the "nuke & restore" semantics (old rows were deleted by
 		// the project-level swap; ON DELETE CASCADE clears the wall with them).
-		if err := upsertWallForImportTx(ctx, tx, projectID, pExport.Wall, &result.Warnings); err != nil {
+		if err := upsertWallForImportTx(ctx, tx, projectID, pExport.Wall, &result.Warnings, imported.storyResolver(ctx, tx, projectID, false)); err != nil {
 			tx.Rollback()
 			return nil, fmt.Errorf("import wall for project %q: %w", pExport.Name, err)
 		}
@@ -1810,6 +1885,32 @@ func (s *Store) importReplaceAll(ctx context.Context, data *ExportData, mode Mod
 		"DELETE FROM projects WHERE (%s) AND import_batch_id IS NULL",
 		whereClause)
 
+	// Capture the replaced projects' image files inside the swap; they are reported only after
+	// the swap commits, so a failed swap never removes a file. (JSON replaces leave them to the
+	// orphan sweep.)
+	var removedAssets []AssetFileRef
+	if plan != nil {
+		rows, err := txSwap.QueryContext(ctx, fmt.Sprintf("SELECT id FROM projects WHERE (%s) AND import_batch_id IS NULL", whereClause), args...)
+		if err != nil {
+			txSwap.Rollback()
+			return nil, fmt.Errorf("list replaced projects: %w", err)
+		}
+		idSet := map[int64]struct{}{}
+		if err := collectIDs(rows, idSet); err != nil {
+			txSwap.Rollback()
+			return nil, fmt.Errorf("list replaced projects: %w", err)
+		}
+		ids := make([]int64, 0, len(idSet))
+		for id := range idSet {
+			ids = append(ids, id)
+		}
+		removedAssets, err = listProjectAssetUUIDsTx(ctx, txSwap, ids)
+		if err != nil {
+			txSwap.Rollback()
+			return nil, err
+		}
+	}
+
 	_, err = txSwap.ExecContext(ctx, deleteQuery, args...)
 	if err != nil {
 		txSwap.Rollback()
@@ -1824,25 +1925,40 @@ func (s *Store) importReplaceAll(ctx context.Context, data *ExportData, mode Mod
 		return nil, fmt.Errorf("promote staging: %w", err)
 	}
 
+	if replaceSwapBeforeCommitHook != nil {
+		if err := replaceSwapBeforeCommitHook(); err != nil {
+			txSwap.Rollback()
+			return nil, err
+		}
+	}
 	if err := txSwap.Commit(); err != nil {
 		return nil, fmt.Errorf("commit swap: %w", err)
 	}
 
 	// Success: disable cleanup
 	cleanupNeeded = false
+	if plan != nil {
+		plan.RemovedAssets = removedAssets
+	}
 
 	return result, nil
 }
 
+// replaceSwapBeforeCommitHook lets tests fail the Replace swap transaction just before commit.
+var replaceSwapBeforeCommitHook func() error
+
+// replaceSkipStagingCleanupHook lets tests simulate a crash that skips staging cleanup.
+var replaceSkipStagingCleanupHook bool
+
 // importMergeUpdate implements Merge/Update mode (match by slug)
-func (s *Store) importMergeUpdate(ctx context.Context, data *ExportData, mode Mode) (*ImportResult, error) {
+func (s *Store) importMergeUpdate(ctx context.Context, data *ExportData, mode Mode, plan *ImportAssetPlan) (*ImportResult, error) {
 	result := &ImportResult{Warnings: []string{}}
 
 	// In anonymous mode, all imported projects are new (no matching).
 	// Short-circuit before opening a transaction so we don't hold a connection
 	// while delegating to importCreateCopy (which opens its own transaction).
 	if mode == ModeAnonymous {
-		return s.importCreateCopy(ctx, data, mode)
+		return s.importCreateCopy(ctx, data, mode, plan)
 	}
 	matchedProjectIDs := make([]int64, 0, len(data.Projects))
 	seenMatched := make(map[int64]struct{}, len(data.Projects))
@@ -1920,7 +2036,7 @@ func (s *Store) importMergeUpdate(ctx context.Context, data *ExportData, mode Mo
 
 	// Process each project in import
 	processedProjectIDs := make([]int64, 0, len(data.Projects))
-	for _, pExport := range data.Projects {
+	for pi, pExport := range data.Projects {
 		// Validate required fields
 		if pExport.Slug == "" {
 			return nil, fmt.Errorf("%w: project missing slug", ErrValidation)
@@ -2156,8 +2272,16 @@ func (s *Store) importMergeUpdate(ctx context.Context, data *ExportData, mode Mo
 			return nil, fmt.Errorf("import sprints for project %q: %w", pExport.Name, err)
 		}
 
+		// Archive images: rows (or content dedupe) in the target project, then remapped bodies.
+		todos, err := s.applyImportAssetsTx(ctx, tx, plan, pi, projectID, pExport, time.Now().UTC().UnixMilli())
+		if err != nil {
+			return nil, err
+		}
+
 		// Import todos - (project_id, local_id) is stable identity
-		for _, tExport := range pExport.Todos {
+		imported := newImportedTodos(len(todos))
+		for i, tExport := range todos {
+			sourceLocalID := tExport.LocalID
 			// Validate required fields
 			if tExport.LocalID == 0 {
 				return nil, fmt.Errorf("%w: todo missing localId", ErrValidation)
@@ -2191,6 +2315,9 @@ func (s *Store) importMergeUpdate(ctx context.Context, data *ExportData, mode Mo
 
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return nil, fmt.Errorf("check todo: %w", err)
+			}
+			if existingTodoID.Valid && imported.wasCreated(existingTodoID.Int64) {
+				existingTodoID = sql.NullInt64{}
 			}
 
 			updatedAtMs := tExport.UpdatedAt.UnixMilli()
@@ -2253,6 +2380,10 @@ func (s *Store) importMergeUpdate(ctx context.Context, data *ExportData, mode Mo
 				_, err = tx.ExecContext(ctx, fmt.Sprintf("UPDATE todos SET %s WHERE id = ?", strings.Join(setClauses, ", ")), updateArgs...)
 				if err != nil {
 					return nil, fmt.Errorf("update todo: %w", err)
+				}
+				imported.record(i, sourceLocalID, sourceLocalID, existingTodoID.Int64, false)
+				if err := syncTodoAssetsTx(ctx, tx, projectID, existingTodoID.Int64, tExport.Body, time.Now().UTC().UnixMilli()); err != nil {
+					return nil, err
 				}
 
 				// Update tags
@@ -2319,6 +2450,10 @@ func (s *Store) importMergeUpdate(ctx context.Context, data *ExportData, mode Mo
 				if err := tx.QueryRowContext(ctx, `SELECT id FROM todos WHERE project_id = ? AND local_id = ?`, projectID, tExport.LocalID).Scan(&todoID); err != nil {
 					return nil, fmt.Errorf("get todo id: %w", err)
 				}
+				imported.record(i, sourceLocalID, tExport.LocalID, todoID, true)
+				if err := syncTodoAssetsTx(ctx, tx, projectID, todoID, tExport.Body, time.Now().UTC().UnixMilli()); err != nil {
+					return nil, err
+				}
 
 				// Import tags
 				if err := s.importTodoTags(ctx, tx, projectID, todoID, tExport.Tags, mode); err != nil {
@@ -2341,10 +2476,10 @@ func (s *Store) importMergeUpdate(ctx context.Context, data *ExportData, mode Mo
 		if _, err := tx.ExecContext(ctx, `DELETE FROM todo_links WHERE project_id = ?`, projectID); err != nil {
 			return nil, fmt.Errorf("clear links for merge: %w", err)
 		}
-		if err := bulkInsertLinks(ctx, tx, projectID, pExport.Links); err != nil {
+		if err := bulkInsertLinks(ctx, tx, projectID, pExport.Links, imported, true); err != nil {
 			return nil, fmt.Errorf("import links: %w", err)
 		}
-		if err := importCustomFieldsTx(ctx, tx, projectID, pExport); err != nil {
+		if err := importCustomFieldsTx(ctx, tx, projectID, pExport, imported); err != nil {
 			return nil, fmt.Errorf("import custom fields: %w", err)
 		}
 
@@ -2354,7 +2489,7 @@ func (s *Store) importMergeUpdate(ctx context.Context, data *ExportData, mode Mo
 		// the target project's existing wall untouched so upgraders don't lose
 		// work done between export and import.
 		if pExport.Wall != nil {
-			if err := upsertWallForImportTx(ctx, tx, projectID, pExport.Wall, &result.Warnings); err != nil {
+			if err := upsertWallForImportTx(ctx, tx, projectID, pExport.Wall, &result.Warnings, imported.storyResolver(ctx, tx, projectID, true)); err != nil {
 				return nil, fmt.Errorf("import wall for project %q: %w", pExport.Name, err)
 			}
 		}
@@ -2374,7 +2509,7 @@ func (s *Store) importMergeUpdate(ctx context.Context, data *ExportData, mode Mo
 }
 
 // importCreateCopy implements Create Copy mode (duplicates allowed)
-func (s *Store) importCreateCopy(ctx context.Context, data *ExportData, mode Mode) (*ImportResult, error) {
+func (s *Store) importCreateCopy(ctx context.Context, data *ExportData, mode Mode, plan *ImportAssetPlan) (*ImportResult, error) {
 	result := &ImportResult{Warnings: []string{}}
 
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
@@ -2387,7 +2522,7 @@ func (s *Store) importCreateCopy(ctx context.Context, data *ExportData, mode Mod
 	projectIDMap := make(map[string]int64)
 
 	// Process each project
-	for _, pExport := range data.Projects {
+	for pi, pExport := range data.Projects {
 		// Validate required fields
 		if pExport.Slug == "" {
 			return nil, fmt.Errorf("%w: project missing slug", ErrValidation)
@@ -2539,8 +2674,15 @@ func (s *Store) importCreateCopy(ctx context.Context, data *ExportData, mode Mod
 			return nil, fmt.Errorf("import sprints for project %q: %w", pExport.Name, err)
 		}
 
+		// Archive images: rows in the new project, then remapped bodies.
+		todos, err := s.applyImportAssetsTx(ctx, tx, plan, pi, newProjectID, pExport, time.Now().UTC().UnixMilli())
+		if err != nil {
+			return nil, err
+		}
+
 		// Import todos - preserve localId values from import
-		for _, tExport := range pExport.Todos {
+		imported := newImportedTodos(len(todos))
+		for i, tExport := range todos {
 			// Validate required fields
 			if tExport.LocalID == 0 {
 				return nil, fmt.Errorf("%w: todo missing localId", ErrValidation)
@@ -2630,6 +2772,10 @@ func (s *Store) importCreateCopy(ctx context.Context, data *ExportData, mode Mod
 			if err := tx.QueryRowContext(ctx, `SELECT id FROM todos WHERE project_id = ? AND local_id = ?`, newProjectID, localID).Scan(&todoID); err != nil {
 				return nil, fmt.Errorf("get todo id: %w", err)
 			}
+			imported.record(i, tExport.LocalID, localID, todoID, true)
+			if err := syncTodoAssetsTx(ctx, tx, newProjectID, todoID, tExport.Body, time.Now().UTC().UnixMilli()); err != nil {
+				return nil, err
+			}
 
 			// Import tags
 			if err := s.importTodoTags(ctx, tx, newProjectID, todoID, tExport.Tags, mode); err != nil {
@@ -2644,17 +2790,17 @@ func (s *Store) importCreateCopy(ctx context.Context, data *ExportData, mode Mod
 			}
 		}
 
-		if err := bulkInsertLinks(ctx, tx, newProjectID, pExport.Links); err != nil {
+		if err := bulkInsertLinks(ctx, tx, newProjectID, pExport.Links, imported, false); err != nil {
 			return nil, fmt.Errorf("import links: %w", err)
 		}
-		if err := importCustomFieldsTx(ctx, tx, newProjectID, pExport); err != nil {
+		if err := importCustomFieldsTx(ctx, tx, newProjectID, pExport, imported); err != nil {
 			return nil, fmt.Errorf("import custom fields: %w", err)
 		}
 
 		// Copy mode: always write the wall block verbatim when present. The
 		// target project was just created so there is no pre-existing wall
 		// to merge with.
-		if err := upsertWallForImportTx(ctx, tx, newProjectID, pExport.Wall, &result.Warnings); err != nil {
+		if err := upsertWallForImportTx(ctx, tx, newProjectID, pExport.Wall, &result.Warnings, imported.storyResolver(ctx, tx, newProjectID, false)); err != nil {
 			return nil, fmt.Errorf("import wall for project %q: %w", pExport.Name, err)
 		}
 
@@ -2831,12 +2977,16 @@ VALUES (?, ?, ?)`, projectID, tagID, nowMs)
 
 // PreviewImport returns preview counts without executing (dry-run)
 func (s *Store) PreviewImport(ctx context.Context, data *ExportData, mode Mode, importMode string) (*PreviewResult, error) {
+	return s.previewImport(ctx, data, mode, importMode, false)
+}
+
+func (s *Store) previewImport(ctx context.Context, data *ExportData, mode Mode, importMode string, fromArchive bool) (*PreviewResult, error) {
 	// CRITICAL: Must use exact same resolution logic as import handlers
 	// We'll use an in-memory resolver approach for safety
 	result := &PreviewResult{Warnings: []string{}}
 
 	// Validate JSON structure and version
-	if err := validateBackupVersionAndArchiveFields(data); err != nil {
+	if err := validateBackupData(data, fromArchive); err != nil {
 		if data != nil {
 			log.Printf("PreviewImport: Version/archive validation failed for version %s: %v", data.Version, err)
 		}

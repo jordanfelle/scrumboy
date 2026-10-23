@@ -413,7 +413,9 @@ WHERE v.todo_id IN (`+strings.Join(ph, ",")+`)`, args...)
 // values into a project after its todos exist. Definitions are matched by key
 // (existing ones are kept; a type mismatch is a validation error), values are
 // validated against their definition, and a todo without values is untouched.
-func importCustomFieldsTx(ctx context.Context, tx *sql.Tx, projectID int64, p ProjectExport) error {
+// Values are written to the destination todos recorded in imported, never to a
+// todo looked up by its backup local ID.
+func importCustomFieldsTx(ctx context.Context, tx *sql.Tx, projectID int64, p ProjectExport, imported *importedTodos) error {
 	hasValues := false
 	for _, t := range p.Todos {
 		if len(t.CustomFields) > 0 {
@@ -465,13 +467,13 @@ VALUES (?, ?, ?, ?, ?)`, projectID, key, name, string(typ), position)
 		byKey[key] = CustomField{ID: id, ProjectID: projectID, Key: key, Name: name, Type: typ, Position: position}
 		position++
 	}
-	for _, t := range p.Todos {
+	for i, t := range p.Todos {
 		if len(t.CustomFields) == 0 {
 			continue
 		}
-		todoID, err := getTodoIDByLocalIDTx(ctx, tx, projectID, t.LocalID)
-		if err != nil {
-			return fmt.Errorf("custom fields for todo %d: %w", t.LocalID, err)
+		todoID := imported.todoIDs[i]
+		if todoID == 0 {
+			return fmt.Errorf("custom fields for todo %d: todo was not imported", t.LocalID)
 		}
 		current, err := loadTodoCustomFieldsQ(ctx, tx, todoID)
 		if err != nil {

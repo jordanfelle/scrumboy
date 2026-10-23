@@ -140,6 +140,9 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request, rest []stri
 	if s.handleBoardClaimRoute(w, r, rest, &pc) {
 		return
 	}
+	if s.handleBoardAssetRoutes(w, r, rest, &pc) {
+		return
+	}
 	if s.handleBoardTodoRoutes(w, r, rest, &pc) {
 		return
 	}
